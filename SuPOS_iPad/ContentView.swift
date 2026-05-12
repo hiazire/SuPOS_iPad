@@ -97,6 +97,15 @@ struct CartItem: Identifiable, Hashable {
     let menuItem: MenuItem
     var quantity: Int
     var selectedOptions: [OptionItem]
+    var isComplimentary: Bool = false
+
+    static func == (lhs: CartItem, rhs: CartItem) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
 }
 
 struct OrderMetadata {
@@ -143,6 +152,7 @@ struct ContentView: View {
     // --- 計算屬性 ---
     var cartTotal: Int {
         cart.reduce(0) { total, item in
+            guard !item.isComplimentary else { return total }
             let optionsPrice = item.selectedOptions.reduce(0) { $0 + $1.price }
             return total + ((item.menuItem.price + optionsPrice) * item.quantity)
         }
@@ -166,6 +176,7 @@ struct ContentView: View {
             FuncButton(title: "刪除商品", icon: "trash", action: { deleteSelectedCartItem() }),
             FuncButton(title: "取消交易", icon: "xmark.circle", action: { cancelEntireTransaction() }),
             FuncButton(title: "清除加料", icon: "minus.square", action: { clearOptionsOfSelected() }),
+            FuncButton(title: "招待", icon: "gift.fill", action: { applyComplimentary() }),
             FuncButton(title: "交易紀錄", icon: "doc.text.magnifyingglass", action: {
                 currentPOSViewMode = .transactionHistory
                 selectedItemForOptions = nil
@@ -449,6 +460,18 @@ struct ContentView: View {
 
     func clearOptionsOfSelected() {
         if let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) { cart[idx].selectedOptions = [] }
+    }
+
+    // 招待功能：切換品項或整台購物車的招待狀態
+    func applyComplimentary() {
+        HapticManager.shared.triggerMedium()
+        if let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) {
+            cart[idx].isComplimentary.toggle()
+        } else if !cart.isEmpty {
+            for i in 0..<cart.count {
+                cart[i].isComplimentary = true
+            }
+        }
     }
 
     func toggleTransactionType() {
@@ -775,21 +798,54 @@ extension ContentView {
 
     @ViewBuilder
     func CartListView() -> some View {
-        List(cart) { item in
-            let total = (item.menuItem.price + item.selectedOptions.reduce(0) { $0 + $1.price }) * item.quantity
-            Button(action: { selectedCartItemID = item.id; selectedItemForOptions = item.menuItem }) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.menuItem.name).font(.headline).foregroundColor(selectedCartItemID == item.id ? .blue : .primary)
-                        ForEach(Dictionary(grouping: item.selectedOptions, by: { $0.name }).map { $0.key }, id: \.self) { optName in
-                            Text("・\(optName)").font(.subheadline).foregroundColor(.orange)
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                // 💡 強制加上 id: \.id，徹底斬斷 SwiftUI 的型別推導錯亂
+                ForEach(cart, id: \.id) { item in
+                    let optionsPrice = item.selectedOptions.reduce(0) { $0 + $1.price }
+                    let total = (item.menuItem.price + optionsPrice) * item.quantity
+
+                    Button(action: {
+                        selectedCartItemID = item.id
+                        selectedItemForOptions = item.menuItem
+                    }) {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(item.menuItem.name)
+                                        .font(.headline)
+                                        .foregroundColor(selectedCartItemID == item.id ? .blue : .primary)
+
+                                    // 🌟 如果是招待商品，打上醒目紅色標籤
+                                    if item.isComplimentary {
+                                        Text("(招待)")
+                                            .font(.subheadline)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.red)
+                                    }
+                                }
+
+                                ForEach(Dictionary(grouping: item.selectedOptions, by: { $0.name }).map { $0.key }, id: \.self) { optName in
+                                    Text("・\(optName)")
+                                        .font(.subheadline)
+                                        .foregroundColor(.orange)
+                                }
+                            }
+                            Spacer()
+                            // 🌟 如果是招待商品，金額強制顯示為 $0，且字體變紅
+                            Text("$\(item.isComplimentary ? 0 : total)")
+                                .fontWeight(.bold)
+                                .foregroundColor(item.isComplimentary ? .red : .primary)
                         }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 16)
                     }
-                    Spacer(); Text("$\(total)").fontWeight(.bold)
-                }.padding(.vertical, 4)
+                    .background(selectedCartItemID == item.id ? Color.blue.opacity(0.1) : Color.clear)
+
+                    Divider()
+                }
             }
-            .listRowBackground(selectedCartItemID == item.id ? Color.blue.opacity(0.1) : Color.clear)
-        }.listStyle(.plain)
+        }
     }
 
     @ViewBuilder
