@@ -409,14 +409,42 @@ struct ContentView: View {
         cart = []; orderMetadata = OrderMetadata(); selectedCartItemID = nil; selectedItemForOptions = nil
     }
 
+    // 指定品項數量增加/減少 (+1 / -1)
     func adjustQuantity(ofSelected adjustment: Int) {
         guard let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) else { return }
         cart[idx].quantity += adjustment
-        if cart[idx].quantity < 1 { cart.remove(at: idx); selectedCartItemID = nil }
+
+        // 如果數量小於 1，移除該品項
+        if cart[idx].quantity < 1 {
+            cart.remove(at: idx)
+
+            // 🌟 自動對焦邏輯：數量扣到 0 被移除時，把焦點交給購物車最後一個商品
+            if let lastItem = cart.last {
+                selectedCartItemID = lastItem.id
+                selectedItemForOptions = lastItem.menuItem
+            } else {
+                selectedCartItemID = nil
+                selectedItemForOptions = nil
+            }
+        }
     }
 
+    // 刪除被選定的品項
     func deleteSelectedCartItem() {
-        if let id = selectedCartItemID { cart.removeAll { $0.id == id }; selectedCartItemID = nil }
+        if let id = selectedCartItemID {
+            // 1. 移除選定的商品
+            cart.removeAll { $0.id == id }
+
+            // 🌟 自動對焦邏焦邏輯：刪除後，把焦點交給購物車最後一個商品
+            if let lastItem = cart.last {
+                selectedCartItemID = lastItem.id
+                selectedItemForOptions = lastItem.menuItem // 連動下方配料選單
+            } else {
+                // 只有在購物車被清空時，才把焦點取消
+                selectedCartItemID = nil
+                selectedItemForOptions = nil
+            }
+        }
     }
 
     func clearOptionsOfSelected() {
