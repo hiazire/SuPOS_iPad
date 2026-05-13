@@ -167,10 +167,10 @@ struct ContentView: View {
 
     var allFunctionButtons: [FuncButton] {
         [
+            FuncButton(title: "", icon: "plus", action: { adjustQuantity(ofSelected: 1) }),
+            FuncButton(title: "", icon: "minus", action: { adjustQuantity(ofSelected: -1) }),
             FuncButton(title: "訂單暫存", icon: "tray.and.arrow.down", action: { saveCurrentOrderToTemp() }),
             FuncButton(title: "暫存區", icon: "tray.full", action: { currentPOSViewMode = .tempOrders; selectedItemForOptions = nil }),
-            FuncButton(title: "+1", icon: "plus", action: { adjustQuantity(ofSelected: 1) }),
-            FuncButton(title: "-1", icon: "minus", action: { adjustQuantity(ofSelected: -1) }),
             FuncButton(title: "手動點餐", icon: "square.grid.3x3.fill", action: { currentPOSViewMode = .manualOrdering; selectedItemForOptions = nil }),
             FuncButton(title: orderMetadata.transactionType, icon: "bag", action: { toggleTransactionType() }),
             FuncButton(title: "刪除商品", icon: "trash", action: { deleteSelectedCartItem() }),
@@ -226,10 +226,14 @@ struct ContentView: View {
                         LabeledInfoView(title: "發票號碼", value: orderMetadata.invoiceNumber)
                         LabeledInfoView(title: "統一編號", value: orderMetadata.ubn)
                         LabeledInfoView(title: "發票載具", value: orderMetadata.carrier)
-                    }
-                }
+}
             }
-            .padding(10)
+            Text("Version: 26may13_01_hermes")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .padding(.top, 2)
+        }
+        .padding(10)
             .frame(height: totalHeight * 0.2, alignment: .topLeading)
             .background(Color(UIColor.systemGray6))
             
@@ -254,33 +258,68 @@ struct ContentView: View {
     // --- 中間：機械感功能切換 ---
     @ViewBuilder
     func FunctionTogglesColumn(totalHeight: CGFloat) -> some View {
-        let columnWidth: CGFloat = 100
-        let buttonSize: CGFloat = columnWidth - 10
+        let columnWidth: CGFloat = 180 // 135 -> 180
+        let spacing: CGFloat = 8 // ★ 統一的間隙：定義邊距與按鍵間的距離皆為 12
+        let buttonSize: CGFloat = (columnWidth - 24) / 2
+        let topBottomButtonHeight: CGFloat = 60 // 上下按鈕的統一高度
         let arrowHeight: CGFloat = 45
-        let fixedHeights = (arrowHeight * 2) + buttonSize + 10
-        let functionsPerPage = max(1, Int((totalHeight - fixedHeights) / (buttonSize + 8)))
-        let totalPages = max(1, Int(ceil(Double(allFunctionButtons.count) / Double(functionsPerPage))))
+        let fixedHeights = arrowHeight + buttonSize + 16
+        let gridRowsPerPage = max(1, Int((totalHeight - fixedHeights) / (buttonSize + 8)))
+        let buttonsPerPage = gridRowsPerPage * 2
+        let totalPages = max(1, Int(ceil(Double(allFunctionButtons.count) / Double(buttonsPerPage))))
 
         VStack(spacing: 0) {
-            FunctionPageButton(icon: "chevron.up", height: arrowHeight, action: { changeFunctionPage(by: -1, totalPages: totalPages) }, isDisabled: totalPages <= 1)
-            
+            // 1. 頂部：上下方向鍵 (橘色、與結帳鍵對稱)
+            HStack(spacing: spacing) {
+                Button(action: { changeFunctionPage(by: -1, totalPages: totalPages) }) {
+                    Image(systemName: "chevron.up").font(.title2).foregroundColor(.white)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.orange)
+                .cornerRadius(10)
+                .opacity(totalPages <= 1 ? 0.5 : 1.0)
+                .disabled(totalPages <= 1)
+
+                Button(action: { changeFunctionPage(by: 1, totalPages: totalPages) }) {
+                    Image(systemName: "chevron.down").font(.title2).foregroundColor(.white)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.orange)
+                .cornerRadius(10)
+                .opacity(totalPages <= 1 ? 0.5 : 1.0)
+                .disabled(totalPages <= 1)
+            }
+            .frame(width: columnWidth - (spacing * 2), height: topBottomButtonHeight)
+            .padding(.top, spacing * 1.5)
+            .padding(.bottom, spacing)
+
+            // 2. 中間：雙欄按鍵網格 (完美等距)
             GeometryReader { geo in
                 VStack(spacing: 0) {
                     ForEach(0..<totalPages, id: \.self) { pageIndex in
                         VStack(spacing: 0) {
                             Spacer(minLength: 0)
-                            let start = pageIndex * functionsPerPage
-                            let end = min(start + functionsPerPage, allFunctionButtons.count)
-                            ForEach(start..<end, id: \.self) { idx in
-                                SquareFunctionButton(title: allFunctionButtons[idx].title, icon: allFunctionButtons[idx].icon, size: buttonSize, action: allFunctionButtons[idx].action)
-                                Spacer(minLength: 0)
-                            }
-                            if (end - start) < functionsPerPage {
-                                ForEach(0..<(functionsPerPage - (end - start)), id: \.self) { _ in
-                                    Color.clear.frame(width: buttonSize, height: buttonSize)
-                                    Spacer(minLength: 0)
+                            let start = pageIndex * buttonsPerPage
+                            let end = min(start + buttonsPerPage, allFunctionButtons.count)
+                            
+                            // ★ 強制指定 GridItem 寬度與間距，取代原本失控的 .flexible()
+                            LazyVGrid(columns: [
+                                GridItem(.fixed(buttonSize), spacing: spacing),
+                                GridItem(.fixed(buttonSize))
+                            ], spacing: spacing) {
+                                ForEach(start..<end, id: \.self) { idx in
+                                    SquareFunctionButton(title: allFunctionButtons[idx].title, icon: allFunctionButtons[idx].icon, size: buttonSize, action: allFunctionButtons[idx].action)
+                                }
+                                // 填補空缺的透明按鈕
+                                if (end - start) < buttonsPerPage {
+                                    ForEach(0..<(buttonsPerPage - (end - start)), id: \.self) { _ in
+                                        Color.clear.frame(width: buttonSize, height: buttonSize)
+                                    }
                                 }
                             }
+                            .padding(.horizontal, spacing) // ★ 讓左右邊緣的距離，跟按鍵中間的間隙一樣大
+                            
+                            Spacer(minLength: 0)
                         }
                         .frame(width: geo.size.width, height: geo.size.height)
                     }
@@ -295,10 +334,20 @@ struct ContentView: View {
                 else if value.translation.height > 30 { changeFunctionPage(by: -1, totalPages: totalPages) }
             })
 
-            FunctionPageButton(icon: "chevron.down", height: arrowHeight, action: { changeFunctionPage(by: 1, totalPages: totalPages) }, isDisabled: totalPages <= 1)
-            
-            Spacer(minLength: 8)
-            SquareFunctionButton(title: "結帳", icon: "cart.fill", size: buttonSize, action: { currentPOSViewMode = .checkout }, isCheckout: true)
+            // 3. 底部：結帳按鍵 (橘色、與上方方向鍵完全對稱)
+            Spacer(minLength: spacing)
+            Button(action: { currentPOSViewMode = .checkout }) {
+                VStack(spacing: 4) {
+                    Image(systemName: "cart.fill").font(.title2)
+                    Text("結帳").font(.headline)
+                }
+                // ★ 寬度設定為「總寬度 - 左右邊距」，與上方的 HStack 完全一致
+                .frame(width: columnWidth - (spacing * 2), height: topBottomButtonHeight)
+                .foregroundColor(.white)
+                .background(Color.orange) // ★ 改為橘色
+                .cornerRadius(10)
+            }
+            .padding(.bottom, spacing)
         }
         .frame(width: columnWidth, height: totalHeight)
         .background(Color(UIColor.secondarySystemBackground))
@@ -990,7 +1039,7 @@ struct SquareFunctionButton: View {
         Button(action: action) {
             VStack(spacing: 5) {
                 Image(systemName: icon).font(.title2).fontWeight(.bold)
-                Text(title).font(.system(size: 13, weight: .bold)).lineLimit(1).minimumScaleFactor(0.5)
+                Text(title).font(.system(size: 18, weight: .bold)).lineLimit(1).minimumScaleFactor(0.5)
             }
             .foregroundColor(isCheckout ? .white : .primary).frame(width: size, height: size)
             .background(isCheckout ? Color.blue : Color(UIColor.systemBackground))
