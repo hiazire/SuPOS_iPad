@@ -48,7 +48,7 @@ struct ContentView: View {
                         LabeledInfoView(title: "發票載具", value: vm.orderMetadata.carrier)
                     }
                 }
-                Text("Version: 26may14_1_rabisu")
+                Text("Version: 26may14_2_rabisu")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .padding(.top, 2)
