@@ -1,189 +1,11 @@
 import SwiftUI
-import AVFoundation
-import AudioToolbox
-internal import Combine
-
-// ================= 1. 資料模型區 (Data Model) =================
-
-struct FuncButton {
-    let title: String
-    let icon: String
-    let action: () -> Void
-}
-
-struct MenuItem: Identifiable, Codable, Hashable {
-    let id: Int
-    let category: String
-    let name: String
-    let price: Int
-    let imageUrl: String
-    let optionsGroup: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, category, name, price, imageUrl
-        case optionsGroup = "options_group"
-    }
-}
-
-struct WebOrder: Identifiable, Codable, Hashable {
-    var id: String { orderId }
-    let orderId: String
-    let timestamp: String
-    let details: String
-    var state: String
-}
-
-struct WebOrderResponse: Codable {
-    let success: Bool
-    let orders: [WebOrder]
-}
-
-struct MenuResponse: Codable {
-    let success: Bool
-    let menu: [MenuItem]
-    let options: [OptionItem]?
-}
-
-struct TempOrder: Identifiable {
-    let id = UUID()
-    let timestamp: Date
-    let items: [CartItem]
-    let metadata: OrderMetadata
-    
-    var timeString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "a hh:mm:ss"
-        formatter.amSymbol = "AM"
-        formatter.pmSymbol = "PM"
-        return formatter.string(from: timestamp)
-    }
-}
-
-struct ParsedOrderItem: Codable, Hashable {
-    var category: String?
-    var name: String
-    var qty: Int
-    var addons: [ParsedAddon]?
-    struct ParsedAddon: Codable, Hashable {
-        var name: String
-        var qty: Int?
-    }
-}
-
-enum POSViewMode {
-    case manualOrdering
-    case transactionHistory
-    case checkout
-    case onlineOrders
-    case tempOrders
-}
-
-enum OrderDateFilter: String, CaseIterable {
-    case today = "今天"
-    case yesterday = "昨天"
-    case threeDays = "三天內"
-    case fiveDays = "五天內"
-}
-
-struct OptionItem: Identifiable, Codable, Hashable {
-    var id: String { name }
-    let group: String
-    let name: String
-    let price: Int
-}
-
-struct CartItem: Identifiable, Hashable {
-    let id = UUID()
-    let menuItem: MenuItem
-    var quantity: Int
-    var selectedOptions: [OptionItem]
-    var isComplimentary: Bool = false
-
-    static func == (lhs: CartItem, rhs: CartItem) -> Bool {
-        lhs.id == rhs.id
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
-}
-
-struct OrderMetadata {
-    var createdAt: Date?
-    var transactionType: String = "外帶"
-    var invoiceNumber: String = ""
-    var ubn: String = ""
-    var carrier: String = ""
-}
-
-// ================= 2. 主視圖 (Main View) =================
+import Combine
 
 struct ContentView: View {
-    // 雲端配置
-    let API_URL = "https://script.google.com/macros/s/AKfycbw0bjJpGXFNh9TvxOdh_gFRvttou-DkSpRtzu_nFLIyr30KUHpwFr3Bn8LGWBGE5SpJcA/exec"
-    
-    // 狀態變數
-    @State private var webOrders: [WebOrder] = []
-    @State private var selectedDateFilter: OrderDateFilter = .today
-    @State private var incomingOrder: WebOrder? = nil
-    @State private var showingOrderPopup: Bool = false
-    @State private var webOrderPage: Int = 0
-    @State private var selectedWebOrder: WebOrder? = nil
-    @State private var tempSavedOrders: [TempOrder] = []
-    
-    @State private var menuItems: [MenuItem] = []
-    @State private var allOptions: [OptionItem] = []
-    @State private var categories: [String] = []
-    @State private var cart: [CartItem] = []
-    @State private var isLoading = true
-    
-    @State private var selectedCategory: String? = nil
-    @State private var selectedItemForOptions: MenuItem? = nil
-    @State private var selectedCartItemID: UUID? = nil
-    @State private var currentPOSViewMode: POSViewMode = .manualOrdering
-    
-    @State private var categoryPage: Int = 0
-    @State private var itemPage: Int = 0
-    @State private var currentFunctionPage: Int = 0
-    @State private var orderMetadata = OrderMetadata()
+    // ★ 換腦手術的核心：宣告並綁定我們剛剛做好的 ViewModel
+    @StateObject private var vm = POSViewModel()
     
     let pollingTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
-
-    // --- 計算屬性 ---
-    var cartTotal: Int {
-        cart.reduce(0) { total, item in
-            guard !item.isComplimentary else { return total }
-            let optionsPrice = item.selectedOptions.reduce(0) { $0 + $1.price }
-            return total + ((item.menuItem.price + optionsPrice) * item.quantity)
-        }
-    }
-
-    var formattedCreationTime: String {
-        guard let date = orderMetadata.createdAt else { return "尚未建立" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
-    }
-
-    var allFunctionButtons: [FuncButton] {
-        [
-            FuncButton(title: "", icon: "plus", action: { adjustQuantity(ofSelected: 1) }),
-            FuncButton(title: "", icon: "minus", action: { adjustQuantity(ofSelected: -1) }),
-            FuncButton(title: "訂單暫存", icon: "tray.and.arrow.down", action: { saveCurrentOrderToTemp() }),
-            FuncButton(title: "暫存區", icon: "tray.full", action: { currentPOSViewMode = .tempOrders; selectedItemForOptions = nil }),
-            FuncButton(title: "手動點餐", icon: "square.grid.3x3.fill", action: { currentPOSViewMode = .manualOrdering; selectedItemForOptions = nil }),
-            FuncButton(title: orderMetadata.transactionType, icon: "bag", action: { toggleTransactionType() }),
-            FuncButton(title: "刪除商品", icon: "trash", action: { deleteSelectedCartItem() }),
-            FuncButton(title: "取消交易", icon: "xmark.circle", action: { cancelEntireTransaction() }),
-            FuncButton(title: "清除加料", icon: "minus.square", action: { clearOptionsOfSelected() }),
-            FuncButton(title: "招待", icon: "gift.fill", action: { applyComplimentary() }),
-            FuncButton(title: "交易紀錄", icon: "doc.text.magnifyingglass", action: {
-                currentPOSViewMode = .transactionHistory
-                selectedItemForOptions = nil
-                Task { await fetchHistoryFromCloud() } // 點擊時同步抓取方案 B
-            })
-        ]
-    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -199,21 +21,19 @@ struct ContentView: View {
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
-        .defersSystemGestures(on: .top) // 👈 加回：頂部手勢延遲（需滑動兩次才能拉出系統選單）
-        .overlay(PopupOverlayView())    // 👈 這裡就是呼叫被我獨立出去的新彈窗元件
-        .onReceive(pollingTimer) { _ in Task { await checkNewWebOrders() } }
-        .task { await fetchMenuData() }
+        .defersSystemGestures(on: .top)
+        .overlay(PopupOverlayView())
+        .onReceive(pollingTimer) { _ in Task { await vm.checkNewWebOrders() } }
+        .task { await vm.fetchMenuData() }
         .onAppear {
-            // 👈 加回：強制橫向邏輯，確保萬無一失
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
                 windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeLeft))
             }
         }
     }
 
-    // ================= 3. UI 元件區 =================
+    // ================= UI 元件區 =================
 
-    // --- 左側：點餐明細 ---
     @ViewBuilder
     func OrderDetailsColumn(totalHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
@@ -221,19 +41,19 @@ struct ContentView: View {
                 Text("訂單總覽").font(.headline).fontWeight(.bold).padding(.bottom, 2)
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 6) {
-                        LabeledInfoView(title: "建立時間", value: formattedCreationTime)
-                        LabeledInfoView(title: "交易型態", value: orderMetadata.transactionType)
-                        LabeledInfoView(title: "發票號碼", value: orderMetadata.invoiceNumber)
-                        LabeledInfoView(title: "統一編號", value: orderMetadata.ubn)
-                        LabeledInfoView(title: "發票載具", value: orderMetadata.carrier)
-}
+                        LabeledInfoView(title: "建立時間", value: vm.formattedCreationTime)
+                        LabeledInfoView(title: "交易型態", value: vm.orderMetadata.transactionType)
+                        LabeledInfoView(title: "發票號碼", value: vm.orderMetadata.invoiceNumber)
+                        LabeledInfoView(title: "統一編號", value: vm.orderMetadata.ubn)
+                        LabeledInfoView(title: "發票載具", value: vm.orderMetadata.carrier)
+                    }
+                }
+                Text("Version: 26may14_1_rabisu")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .padding(.top, 2)
             }
-            Text("Version: 26may13_01_hermes")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundColor(.secondary)
-                .padding(.top, 2)
-        }
-        .padding(10)
+            .padding(10)
             .frame(height: totalHeight * 0.2, alignment: .topLeading)
             .background(Color(UIColor.systemGray6))
             
@@ -247,7 +67,7 @@ struct ContentView: View {
             HStack {
                 Text("總計金額").font(.title3).fontWeight(.bold)
                 Spacer()
-                Text("$\(cartTotal)").font(.title3).fontWeight(.bold).foregroundColor(.red)
+                Text("$\(vm.cartTotal)").font(.title3).fontWeight(.bold).foregroundColor(.red)
             }
             .padding(.horizontal)
             .frame(height: totalHeight * 0.05)
@@ -255,97 +75,82 @@ struct ContentView: View {
         }
     }
 
-    // --- 中間：機械感功能切換 ---
     @ViewBuilder
     func FunctionTogglesColumn(totalHeight: CGFloat) -> some View {
-        let columnWidth: CGFloat = 180 // 135 -> 180
-        let spacing: CGFloat = 8 // ★ 統一的間隙：定義邊距與按鍵間的距離皆為 12
+        let columnWidth: CGFloat = 180
+        let spacing: CGFloat = 8
         let buttonSize: CGFloat = (columnWidth - 24) / 2
-        let topBottomButtonHeight: CGFloat = 60 // 上下按鈕的統一高度
+        let topBottomButtonHeight: CGFloat = 60
         let arrowHeight: CGFloat = 45
         let fixedHeights = arrowHeight + buttonSize + 16
         let gridRowsPerPage = max(1, Int((totalHeight - fixedHeights) / (buttonSize + 8)))
         let buttonsPerPage = gridRowsPerPage * 2
-        let totalPages = max(1, Int(ceil(Double(allFunctionButtons.count) / Double(buttonsPerPage))))
+        let totalPages = max(1, Int(ceil(Double(vm.allFunctionButtons.count) / Double(buttonsPerPage))))
 
         VStack(spacing: 0) {
-            // 1. 頂部：上下方向鍵 (橘色、與結帳鍵對稱)
             HStack(spacing: spacing) {
-                Button(action: { changeFunctionPage(by: -1, totalPages: totalPages) }) {
+                Button(action: { withAnimation { vm.changeFunctionPage(by: -1, totalPages: totalPages) } }) {
                     Image(systemName: "chevron.up").font(.title2).foregroundColor(.white)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.orange)
-                .cornerRadius(10)
-                .opacity(totalPages <= 1 ? 0.5 : 1.0)
-                .disabled(totalPages <= 1)
+                .background(Color.orange).cornerRadius(10)
+                .opacity(totalPages <= 1 ? 0.5 : 1.0).disabled(totalPages <= 1)
 
-                Button(action: { changeFunctionPage(by: 1, totalPages: totalPages) }) {
+                Button(action: { withAnimation { vm.changeFunctionPage(by: 1, totalPages: totalPages) } }) {
                     Image(systemName: "chevron.down").font(.title2).foregroundColor(.white)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.orange)
-                .cornerRadius(10)
-                .opacity(totalPages <= 1 ? 0.5 : 1.0)
-                .disabled(totalPages <= 1)
+                .background(Color.orange).cornerRadius(10)
+                .opacity(totalPages <= 1 ? 0.5 : 1.0).disabled(totalPages <= 1)
             }
             .frame(width: columnWidth - (spacing * 2), height: topBottomButtonHeight)
-            .padding(.top, spacing * 1.5)
-            .padding(.bottom, spacing)
+            .padding(.top, spacing * 1.5).padding(.bottom, spacing)
 
-            // 2. 中間：雙欄按鍵網格 (完美等距)
             GeometryReader { geo in
                 VStack(spacing: 0) {
                     ForEach(0..<totalPages, id: \.self) { pageIndex in
                         VStack(spacing: 0) {
                             Spacer(minLength: 0)
                             let start = pageIndex * buttonsPerPage
-                            let end = min(start + buttonsPerPage, allFunctionButtons.count)
+                            let end = min(start + buttonsPerPage, vm.allFunctionButtons.count)
                             
-                            // ★ 強制指定 GridItem 寬度與間距，取代原本失控的 .flexible()
                             LazyVGrid(columns: [
                                 GridItem(.fixed(buttonSize), spacing: spacing),
                                 GridItem(.fixed(buttonSize))
                             ], spacing: spacing) {
                                 ForEach(start..<end, id: \.self) { idx in
-                                    SquareFunctionButton(title: allFunctionButtons[idx].title, icon: allFunctionButtons[idx].icon, size: buttonSize, action: allFunctionButtons[idx].action)
+                                    let btn = vm.allFunctionButtons[idx]
+                                    SquareFunctionButton(title: btn.title, icon: btn.icon, size: buttonSize, action: btn.action)
                                 }
-                                // 填補空缺的透明按鈕
                                 if (end - start) < buttonsPerPage {
                                     ForEach(0..<(buttonsPerPage - (end - start)), id: \.self) { _ in
                                         Color.clear.frame(width: buttonSize, height: buttonSize)
                                     }
                                 }
                             }
-                            .padding(.horizontal, spacing) // ★ 讓左右邊緣的距離，跟按鍵中間的間隙一樣大
-                            
+                            .padding(.horizontal, spacing)
                             Spacer(minLength: 0)
                         }
                         .frame(width: geo.size.width, height: geo.size.height)
                     }
                 }
-                .offset(y: -CGFloat(currentFunctionPage) * geo.size.height)
-                .animation(.easeInOut(duration: 0.25), value: currentFunctionPage)
+                .offset(y: -CGFloat(vm.currentFunctionPage) * geo.size.height)
+                .animation(.easeInOut(duration: 0.25), value: vm.currentFunctionPage)
             }
-            .clipped()
-            .contentShape(Rectangle())
+            .clipped().contentShape(Rectangle())
             .gesture(DragGesture().onEnded { value in
-                if value.translation.height < -30 { changeFunctionPage(by: 1, totalPages: totalPages) }
-                else if value.translation.height > 30 { changeFunctionPage(by: -1, totalPages: totalPages) }
+                if value.translation.height < -30 { withAnimation { vm.changeFunctionPage(by: 1, totalPages: totalPages) } }
+                else if value.translation.height > 30 { withAnimation { vm.changeFunctionPage(by: -1, totalPages: totalPages) } }
             })
 
-            // 3. 底部：結帳按鍵 (橘色、與上方方向鍵完全對稱)
             Spacer(minLength: spacing)
-            Button(action: { currentPOSViewMode = .checkout }) {
+            Button(action: { vm.currentPOSViewMode = .checkout }) {
                 VStack(spacing: 4) {
                     Image(systemName: "cart.fill").font(.title2)
                     Text("結帳").font(.headline)
                 }
-                // ★ 寬度設定為「總寬度 - 左右邊距」，與上方的 HStack 完全一致
                 .frame(width: columnWidth - (spacing * 2), height: topBottomButtonHeight)
-                .foregroundColor(.white)
-                .background(Color.orange) // ★ 改為橘色
-                .cornerRadius(10)
+                .foregroundColor(.white).background(Color.orange).cornerRadius(10)
             }
             .padding(.bottom, spacing)
         }
@@ -353,303 +158,32 @@ struct ContentView: View {
         .background(Color(UIColor.secondarySystemBackground))
     }
 
-    // --- 右側：功能展示分流 ---
     @ViewBuilder
     func FunctionDisplayColumn() -> some View {
         GeometryReader { geo in
             VStack(spacing: 0) {
-                if isLoading {
+                if vm.isLoading {
                     ProgressView("正在同步雲端菜單...").scaleEffect(1.5).frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    switch currentPOSViewMode {
+                    switch vm.currentPOSViewMode {
                     case .manualOrdering: ManualOrderingView(size: geo.size)
                     case .transactionHistory: TransactionHistoryPanelView(size: geo.size)
                     case .onlineOrders: OnlineOrdersPanel(size: geo.size)
                     case .tempOrders: TempOrdersPanelView()
-                    case .checkout: PlaceholderView(title: "結帳介面")
+                    case .checkout: CheckoutPanelView(vm: vm, size: geo.size)
                     }
                 }
             }
             .background(Color(UIColor.systemBackground))
         }
     }
-
-    // ================= 4. 核心功能邏輯 (Logic) =================
-
-    func checkNewWebOrders() async {
-        guard let url = URL(string: API_URL) else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("text/plain;charset=utf-8", forHTTPHeaderField: "Content-Type")
-        let payload = ["action": "getPendingOrders"]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-        
-        do {
-            let (data, _) = try await URLSession.shared.data(for: request)
-            let res = try JSONDecoder().decode(WebOrderResponse.self, from: data)
-            await MainActor.run {
-                for order in res.orders {
-                    if let idx = webOrders.firstIndex(where: { $0.orderId == order.orderId }) {
-                        if webOrders[idx].state == "PENDING" { webOrders[idx] = order }
-                    } else { webOrders.append(order) }
-                }
-                if let new = res.orders.first(where: { $0.state == "PENDING" }), !showingOrderPopup {
-                    SoundManager.shared.playSuccess()
-                    incomingOrder = new
-                    showingOrderPopup = true
-                }
-            }
-        } catch { print("Fetch error: \(error)") }
-    }
-
-    func fetchHistoryFromCloud() async {
-        guard let url = URL(string: API_URL) else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("text/plain;charset=utf-8", forHTTPHeaderField: "Content-Type")
-        
-        // 方案 B：告知後端需要歷史資料
-        let days: Int = (selectedDateFilter == .today) ? 0 : (selectedDateFilter == .yesterday ? 1 : (selectedDateFilter == .threeDays ? 3 : 5))
-        let payload: [String: Any] = ["action": "getHistoryOrders", "days": days]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-        
-        do {
-            let (data, _) = try await URLSession.shared.data(for: request)
-            let res = try JSONDecoder().decode(WebOrderResponse.self, from: data)
-            await MainActor.run {
-                for order in res.orders {
-                    if let idx = webOrders.firstIndex(where: { $0.orderId == order.orderId }) {
-                        self.webOrders[idx] = order
-                    } else { self.webOrders.append(order) }
-                }
-            }
-        } catch { print("History fetch error") }
-    }
-
-    func parseOrderDate(_ dateString: String) -> Date? {
-        let prefix = String(dateString.prefix(24))
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "E MMM dd yyyy HH:mm:ss"
-        return formatter.date(from: prefix)
-    }
-
-    var filteredHistoryOrders: [WebOrder] {
-        let calendar = Calendar.current
-        let startOfToday = calendar.startOfDay(for: Date())
-        return webOrders.filter { order in
-            guard let orderDate = parseOrderDate(order.timestamp) else { return false }
-            let dayDiff = calendar.dateComponents([.day], from: calendar.startOfDay(for: orderDate), to: startOfToday).day ?? 0
-            switch selectedDateFilter {
-            case .today: return dayDiff == 0
-            case .yesterday: return dayDiff == 1
-            case .threeDays: return dayDiff >= 0 && dayDiff <= 2
-            case .fiveDays: return dayDiff >= 0 && dayDiff <= 4
-            }
-        }
-    }
-
-    // --- 其他 Helper 函數 ---
-    func saveCurrentOrderToTemp() {
-        guard !cart.isEmpty else { return }
-        tempSavedOrders.insert(TempOrder(timestamp: Date(), items: cart, metadata: orderMetadata), at: 0)
-        if tempSavedOrders.count > 5 { tempSavedOrders.removeLast() }
-        cancelEntireTransaction()
-        HapticManager.shared.triggerSuccess()
-    }
-
-    func restoreOrderFromTemp(_ order: TempOrder) {
-        self.cart = order.items
-        self.orderMetadata = order.metadata
-        tempSavedOrders.removeAll { $0.id == order.id }
-        currentPOSViewMode = .manualOrdering
-    }
-
-    func cancelEntireTransaction() {
-        cart = []; orderMetadata = OrderMetadata(); selectedCartItemID = nil; selectedItemForOptions = nil
-    }
-
-    // 指定品項數量增加/減少 (+1 / -1)
-    func adjustQuantity(ofSelected adjustment: Int) {
-        guard let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) else { return }
-        cart[idx].quantity += adjustment
-
-        // 如果數量小於 1，移除該品項
-        if cart[idx].quantity < 1 {
-            cart.remove(at: idx)
-
-            // 🌟 自動對焦邏輯：數量扣到 0 被移除時，把焦點交給購物車最後一個商品
-            if let lastItem = cart.last {
-                selectedCartItemID = lastItem.id
-                selectedItemForOptions = lastItem.menuItem
-            } else {
-                selectedCartItemID = nil
-                selectedItemForOptions = nil
-            }
-        }
-    }
-
-    // 刪除被選定的品項
-    func deleteSelectedCartItem() {
-        if let id = selectedCartItemID {
-            // 1. 移除選定的商品
-            cart.removeAll { $0.id == id }
-
-            // 🌟 自動對焦邏焦邏輯：刪除後，把焦點交給購物車最後一個商品
-            if let lastItem = cart.last {
-                selectedCartItemID = lastItem.id
-                selectedItemForOptions = lastItem.menuItem // 連動下方配料選單
-            } else {
-                // 只有在購物車被清空時，才把焦點取消
-                selectedCartItemID = nil
-                selectedItemForOptions = nil
-            }
-        }
-    }
-
-    func clearOptionsOfSelected() {
-        if let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) { cart[idx].selectedOptions = [] }
-    }
-
-    // 招待功能：切換品項或整台購物車的招待狀態
-    func applyComplimentary() {
-        HapticManager.shared.triggerMedium()
-        if let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) {
-            cart[idx].isComplimentary.toggle()
-        } else if !cart.isEmpty {
-            for i in 0..<cart.count {
-                cart[i].isComplimentary = true
-            }
-        }
-    }
-
-    func toggleTransactionType() {
-        let types = ["外帶", "內用", "電話Line自取件"]
-        if let idx = types.firstIndex(of: orderMetadata.transactionType) {
-            orderMetadata.transactionType = types[(idx + 1) % types.count]
-        }
-    }
-
-    func changeFunctionPage(by adjustment: Int, totalPages: Int) {
-        withAnimation {
-            let next = currentFunctionPage + adjustment
-            currentFunctionPage = (next >= totalPages) ? 0 : (next < 0 ? totalPages - 1 : next)
-        }
-    }
-
-    func handleItemTap(item: MenuItem) {
-        HapticManager.shared.triggerMedium(); SoundManager.shared.playPop()
-        if cart.isEmpty { orderMetadata.createdAt = Date() }
-        let newItem = CartItem(menuItem: item, quantity: 1, selectedOptions: [])
-        cart.append(newItem)
-        selectedCartItemID = newItem.id; selectedItemForOptions = item
-    }
-
-    func addOptionToCart(option: OptionItem) {
-        SoundManager.shared.playTap()
-        if let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) {
-            cart[idx].selectedOptions.append(option)
-        }
-    }
-
-    func fetchMenuData() async {
-        guard let url = URL(string: API_URL) else { return }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let res = try JSONDecoder().decode(MenuResponse.self, from: data)
-            await MainActor.run {
-                self.menuItems = res.menu; self.allOptions = res.options ?? []
-                self.categories = Array(Set(res.menu.map { $0.category })).sorted()
-                self.isLoading = false
-            }
-        } catch { self.isLoading = false }
-    }
-
-    func updateWebOrderState(orderId: String, newState: String) {
-        showingOrderPopup = false; incomingOrder = nil; selectedWebOrder = nil
-        if let idx = webOrders.firstIndex(where: { $0.orderId == orderId }) { webOrders[idx].state = newState }
-        Task {
-            guard let url = URL(string: API_URL) else { return }
-            var req = URLRequest(url: url); req.httpMethod = "POST"
-            req.setValue("text/plain;charset=utf-8", forHTTPHeaderField: "Content-Type")
-            let payload: [String: Any] = ["action": "updateOrderState", "orderId": orderId, "newState": newState]
-            req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-            _ = try? await URLSession.shared.data(for: req)
-        }
-    }
 }
 
-// ================= 5. 子視圖元件 (Subviews) =================
-
-struct OrderListView: View {
-    let webOrders: [WebOrder]
-    @Binding var currentPage: Int
-    @Binding var selectedOrder: WebOrder?
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Text("今日線上訂單").font(.system(size: 36, weight: .black)).padding(.vertical, 20).frame(maxWidth: .infinity)
-            Divider()
-            ScrollView {
-                VStack(spacing: 15) {
-                    if webOrders.isEmpty {
-                        Text("目前尚無線上訂單").font(.title2).foregroundColor(.gray).padding(.top, 50)
-                    } else {
-                        ForEach(webOrders) { order in
-                            OrderRow(order: order) { self.selectedOrder = order }
-                        }
-                    }
-                }
-                .padding(.top, 15).padding(.horizontal, 20).padding(.bottom, 30)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-}
-
-struct OrderRow: View {
-    let order: WebOrder
-    let onTap: () -> Void
-    var cleanTime: String { String(order.timestamp.prefix(24)) }
-    var stateColor: Color {
-        switch order.state {
-        case "PENDING": return .orange
-        case "READY": return .blue
-        case "PRINTED": return .green
-        case "CANCELED": return .red
-        default: return .gray
-        }
-    }
-    var stateText: String {
-        switch order.state {
-        case "PENDING": return "等待入機"
-        case "READY": return "已入機"
-        case "PRINTED": return "已列印"
-        case "CANCELED": return "已取消"
-        default: return order.state
-        }
-    }
-    var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 20) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("單號：\(order.orderId)").font(.system(size: 32, weight: .black)).foregroundColor(.primary)
-                    Text(cleanTime).font(.headline).foregroundColor(.gray)
-                }
-                Spacer()
-                Text(stateText).font(.headline).fontWeight(.bold).foregroundColor(.white).padding(.horizontal, 16).padding(.vertical, 10).background(stateColor).cornerRadius(12)
-                Image(systemName: "chevron.right").foregroundColor(Color.gray.opacity(0.5))
-            }
-            .padding(20).background(Color(UIColor.secondarySystemBackground)).cornerRadius(16)
-        }
-        .buttonStyle(JapaneseButtonStyle())
-    }
-}
-
+// ================= 子視圖元件 (Subviews) =================
 extension ContentView {
     @ViewBuilder
     func ManualOrderingView(size: CGSize) -> some View {
-        if let category = selectedCategory {
+        if let category = vm.selectedCategory {
             VStack(spacing: 0) {
                 ItemPagingGrid(category: category, size: CGSize(width: size.width, height: size.height * 0.7))
                 Divider()
@@ -663,7 +197,7 @@ extension ContentView {
     @ViewBuilder
     func CategoryPagingGrid(size: CGSize) -> some View {
         let itemsPerPage = 20
-        let totalPages = max(1, Int(ceil(Double(categories.count) / Double(itemsPerPage))))
+        let totalPages = max(1, Int(ceil(Double(vm.categories.count) / Double(itemsPerPage))))
         let squareSize = floor(min((size.width - 90) / 5, (size.height - 140) / 4))
 
         VStack(spacing: 0) {
@@ -672,13 +206,13 @@ extension ContentView {
                 HStack(spacing: 0) {
                     ForEach(0..<totalPages, id: \.self) { pageIdx in
                         let start = pageIdx * itemsPerPage
-                        let end = min(start + itemsPerPage, categories.count)
+                        let end = min(start + itemsPerPage, vm.categories.count)
                         let columns = Array(repeating: GridItem(.fixed(squareSize), spacing: 15), count: 5)
                         VStack {
                             Spacer(minLength: 0)
                             LazyVGrid(columns: columns, spacing: 15) {
-                                ForEach(categories[start..<end], id: \.self) { cat in
-                                    Button(action: { selectedCategory = cat; itemPage = 0 }) {
+                                ForEach(vm.categories[start..<end], id: \.self) { cat in
+                                    Button(action: { vm.selectedCategory = cat; vm.itemPage = 0 }) {
                                         Text(cat).font(.title3).fontWeight(.bold).foregroundColor(.white).frame(width: squareSize, height: squareSize)
                                             .background(LinearGradient(colors: [.blue.opacity(0.7), .blue], startPoint: .top, endPoint: .bottom))
                                             .cornerRadius(12).shadow(radius: 3, y: 4)
@@ -690,27 +224,27 @@ extension ContentView {
                         }.frame(width: geo.size.width, height: geo.size.height)
                     }
                 }
-                .offset(x: -CGFloat(categoryPage) * geo.size.width)
-                .animation(.easeInOut(duration: 0.25), value: categoryPage)
+                .offset(x: -CGFloat(vm.categoryPage) * geo.size.width)
+                .animation(.easeInOut(duration: 0.25), value: vm.categoryPage)
             }
             .clipped().contentShape(Rectangle()).gesture(DragGesture().onEnded { v in
-                if v.translation.width < -40 && categoryPage < totalPages - 1 { categoryPage += 1 }
-                else if v.translation.width > 40 && categoryPage > 0 { categoryPage -= 1 }
+                if v.translation.width < -40 && vm.categoryPage < totalPages - 1 { vm.categoryPage += 1 }
+                else if v.translation.width > 40 && vm.categoryPage > 0 { vm.categoryPage -= 1 }
             })
-            PageNavigationButtons(currentPage: $categoryPage, totalPages: totalPages)
+            PageNavigationButtons(currentPage: $vm.categoryPage, totalPages: totalPages)
         }
     }
 
     @ViewBuilder
     func ItemPagingGrid(category: String, size: CGSize) -> some View {
-        let items = menuItems.filter { $0.category == category }
+        let items = vm.menuItems.filter { $0.category == category }
         let itemsPerPage = 20
         let totalPages = max(1, Int(ceil(Double(items.count) / Double(itemsPerPage))))
         let squareSize = floor(min((size.width - 90) / 5, (size.height - 140) / 4))
 
         VStack(spacing: 0) {
             HStack {
-                Button(action: { selectedCategory = nil }) {
+                Button(action: { vm.selectedCategory = nil }) {
                     HStack { Image(systemName: "chevron.left"); Text("返回分類") }.font(.headline).padding(10).background(Color.gray.opacity(0.15)).cornerRadius(8)
                 }
                 Spacer(); Text(category).font(.title).fontWeight(.bold); Spacer()
@@ -726,13 +260,13 @@ extension ContentView {
                             Spacer(minLength: 0)
                             LazyVGrid(columns: columns, spacing: 15) {
                                 ForEach(items[start..<end]) { item in
-                                    Button(action: { handleItemTap(item: item) }) {
+                                    Button(action: { vm.handleItemTap(item: item) }) {
                                         VStack {
                                             Text(item.name).font(.system(size: 16, weight: .bold)).foregroundColor(.primary).multilineTextAlignment(.center)
                                             Text("$\(item.price)").font(.headline).foregroundColor(.gray)
                                         }
                                         .frame(width: squareSize, height: squareSize).background(Color(UIColor.systemBackground)).cornerRadius(12).shadow(radius: 2, y: 2)
-                                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(selectedItemForOptions?.id == item.id ? Color.blue : Color.clear, lineWidth: 3))
+                                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(vm.selectedItemForOptions?.id == item.id ? Color.blue : Color.clear, lineWidth: 3))
                                     }.buttonStyle(JapaneseButtonStyle())
                                 }
                             }
@@ -741,26 +275,26 @@ extension ContentView {
                         }.frame(width: geo.size.width, height: geo.size.height)
                     }
                 }
-                .offset(x: -CGFloat(itemPage) * geo.size.width)
-                .animation(.easeInOut(duration: 0.25), value: itemPage)
+                .offset(x: -CGFloat(vm.itemPage) * geo.size.width)
+                .animation(.easeInOut(duration: 0.25), value: vm.itemPage)
             }
             .clipped().contentShape(Rectangle()).gesture(DragGesture().onEnded { v in
-                if v.translation.width < -40 && itemPage < totalPages - 1 { itemPage += 1 }
-                else if v.translation.width > 40 && itemPage > 0 { itemPage -= 1 }
+                if v.translation.width < -40 && vm.itemPage < totalPages - 1 { vm.itemPage += 1 }
+                else if v.translation.width > 40 && vm.itemPage > 0 { vm.itemPage -= 1 }
             })
-            PageNavigationButtons(currentPage: $itemPage, totalPages: totalPages)
+            PageNavigationButtons(currentPage: $vm.itemPage, totalPages: totalPages)
         }
     }
 
     @ViewBuilder
     func OptionsBottomPanel(size: CGSize) -> some View {
         VStack(spacing: 0) {
-            if let item = selectedItemForOptions, let groups = item.optionsGroup?.components(separatedBy: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+            if let item = vm.selectedItemForOptions, let groups = item.optionsGroup?.components(separatedBy: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
                 Text("\(item.name) - 客製化選項").font(.headline).padding(.top, 10)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 15) {
-                        ForEach(allOptions.filter { groups.contains($0.group) }) { opt in
-                            Button(action: { addOptionToCart(option: opt) }) {
+                        ForEach(vm.allOptions.filter { groups.contains($0.group) }) { opt in
+                            Button(action: { vm.addOptionToCart(option: opt) }) {
                                 VStack {
                                     Text(opt.name).font(.headline).fontWeight(.bold)
                                     Text(opt.price > 0 ? "+\(opt.price)元" : "免費").font(.subheadline)
@@ -783,25 +317,25 @@ extension ContentView {
             HStack(spacing: 15) {
                 ForEach(OrderDateFilter.allCases, id: \.self) { filter in
                     Button(filter.rawValue) {
-                        selectedDateFilter = filter
-                        Task { await fetchHistoryFromCloud() }
+                        vm.selectedDateFilter = filter
+                        Task { await vm.fetchHistoryFromCloud() }
                     }
                     .padding(.vertical, 10).padding(.horizontal, 24)
-                    .background(selectedDateFilter == filter ? Color.blue : Color(UIColor.systemGray5))
-                    .foregroundColor(selectedDateFilter == filter ? .white : .primary)
+                    .background(vm.selectedDateFilter == filter ? Color.blue : Color(UIColor.systemGray5))
+                    .foregroundColor(vm.selectedDateFilter == filter ? .white : .primary)
                     .cornerRadius(20)
                 }
                 Spacer()
             }.padding(.horizontal, 20).padding(.vertical, 12)
             Divider()
-            let orders = filteredHistoryOrders
+            let orders = vm.filteredHistoryOrders
             if orders.isEmpty {
-                VStack { Spacer(); Text("\(selectedDateFilter.rawValue)尚無任何紀錄").foregroundColor(.gray); Spacer() }
+                VStack { Spacer(); Text("\(vm.selectedDateFilter.rawValue)尚無任何紀錄").foregroundColor(.gray); Spacer() }
             } else {
                 ScrollView {
                     VStack(spacing: 15) {
                         ForEach(Array(orders.reversed())) { order in
-                            OrderRow(order: order) { selectedWebOrder = order; currentPOSViewMode = .onlineOrders }
+                            OrderRow(order: order) { vm.selectedWebOrder = order; vm.currentPOSViewMode = .onlineOrders }
                         }
                     }.padding(20)
                 }
@@ -812,11 +346,11 @@ extension ContentView {
     @ViewBuilder
     func OnlineOrdersPanel(size: CGSize) -> some View {
         VStack(spacing: 0) {
-            if let order = selectedWebOrder {
-                HeaderView(selectedWebOrder: order, onBack: { selectedWebOrder = nil })
+            if let order = vm.selectedWebOrder {
+                HeaderView(selectedWebOrder: order, onBack: { vm.selectedWebOrder = nil })
                 OrderDetailContentView(order: order)
             } else {
-                OrderListView(webOrders: webOrders.filter { $0.state == "PENDING" || $0.state == "READY" }, currentPage: $webOrderPage, selectedOrder: $selectedWebOrder)
+                OrderListView(webOrders: vm.webOrders.filter { $0.state == "PENDING" || $0.state == "READY" }, currentPage: $vm.webOrderPage, selectedOrder: $vm.selectedWebOrder)
             }
         }
     }
@@ -824,14 +358,14 @@ extension ContentView {
     @ViewBuilder
     func TempOrdersPanelView() -> some View {
         VStack(spacing: 0) {
-            HStack { Text("訂單暫存區 (最多5筆)").font(.title2).fontWeight(.bold); Spacer(); Text("目前：\(tempSavedOrders.count) 筆").foregroundColor(.gray) }.padding().background(Color(UIColor.systemGray6))
-            if tempSavedOrders.isEmpty {
+            HStack { Text("訂單暫存區 (最多5筆)").font(.title2).fontWeight(.bold); Spacer(); Text("目前：\(vm.tempSavedOrders.count) 筆").foregroundColor(.gray) }.padding().background(Color(UIColor.systemGray6))
+            if vm.tempSavedOrders.isEmpty {
                 Spacer(); Text("暫無儲存訂單").foregroundColor(.gray); Spacer()
             } else {
                 ScrollView {
                     VStack(spacing: 15) {
-                        ForEach(tempSavedOrders) { order in
-                            Button(action: { restoreOrderFromTemp(order) }) {
+                        ForEach(vm.tempSavedOrders) { order in
+                            Button(action: { vm.restoreOrderFromTemp(order) }) {
                                 HStack {
                                     VStack(alignment: .leading) { Text(order.timeString).foregroundColor(.blue); Text("\(order.metadata.transactionType) - \(order.items.count) 品項") }
                                     Spacer(); Image(systemName: "chevron.right")
@@ -841,7 +375,7 @@ extension ContentView {
                     }.padding()
                 }
             }
-            Button("返回點餐") { currentPOSViewMode = .manualOrdering }.font(.headline).padding().frame(maxWidth: .infinity).background(Color.gray).foregroundColor(.white).cornerRadius(12).padding()
+            Button("返回點餐") { vm.currentPOSViewMode = .manualOrdering }.font(.headline).padding().frame(maxWidth: .infinity).background(Color.gray).foregroundColor(.white).cornerRadius(12).padding()
         }
     }
 
@@ -849,23 +383,21 @@ extension ContentView {
     func CartListView() -> some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                // 💡 強制加上 id: \.id，徹底斬斷 SwiftUI 的型別推導錯亂
-                ForEach(cart, id: \.id) { item in
+                ForEach(vm.cart, id: \.id) { item in
                     let optionsPrice = item.selectedOptions.reduce(0) { $0 + $1.price }
                     let total = (item.menuItem.price + optionsPrice) * item.quantity
 
                     Button(action: {
-                        selectedCartItemID = item.id
-                        selectedItemForOptions = item.menuItem
+                        vm.selectedCartItemID = item.id
+                        vm.selectedItemForOptions = item.menuItem
                     }) {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
                                     Text(item.menuItem.name)
                                         .font(.headline)
-                                        .foregroundColor(selectedCartItemID == item.id ? .blue : .primary)
+                                        .foregroundColor(vm.selectedCartItemID == item.id ? .blue : .primary)
 
-                                    // 🌟 如果是招待商品，打上醒目紅色標籤
                                     if item.isComplimentary {
                                         Text("(招待)")
                                             .font(.subheadline)
@@ -881,7 +413,6 @@ extension ContentView {
                                 }
                             }
                             Spacer()
-                            // 🌟 如果是招待商品，金額強制顯示為 $0，且字體變紅
                             Text("$\(item.isComplimentary ? 0 : total)")
                                 .fontWeight(.bold)
                                 .foregroundColor(item.isComplimentary ? .red : .primary)
@@ -889,7 +420,7 @@ extension ContentView {
                         .padding(.vertical, 12)
                         .padding(.horizontal, 16)
                     }
-                    .background(selectedCartItemID == item.id ? Color.blue.opacity(0.1) : Color.clear)
+                    .background(vm.selectedCartItemID == item.id ? Color.blue.opacity(0.1) : Color.clear)
 
                     Divider()
                 }
@@ -899,12 +430,12 @@ extension ContentView {
 
     @ViewBuilder
     func PlaceholderView(title: String) -> some View {
-        VStack { Text(title).font(.largeTitle); Button("返回點餐") { currentPOSViewMode = .manualOrdering }.padding().background(Color.blue).foregroundColor(.white).cornerRadius(10) }
+        VStack { Text(title).font(.largeTitle); Button("返回點餐") { vm.currentPOSViewMode = .manualOrdering }.padding().background(Color.blue).foregroundColor(.white).cornerRadius(10) }
     }
 
     @ViewBuilder
     func PopupOverlayView() -> some View {
-        if showingOrderPopup, let order = incomingOrder {
+        if vm.showingOrderPopup, let order = vm.incomingOrder {
             ZStack {
                 Color.black.opacity(0.6).ignoresSafeArea()
                 VStack(spacing: 0) {
@@ -915,8 +446,8 @@ extension ContentView {
                     }.frame(height: 240)
                     Divider()
                     HStack(spacing: 0) {
-                        Button("訂單入機") { updateWebOrderState(orderId: order.orderId, newState: "READY") }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.blue).foregroundColor(.white)
-                        Button("確認訂單內容") { showingOrderPopup = false; currentPOSViewMode = .onlineOrders; selectedWebOrder = nil }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(UIColor.systemGray5))
+                        Button("訂單入機") { vm.updateWebOrderState(orderId: order.orderId, newState: "READY") }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.blue).foregroundColor(.white)
+                        Button("確認訂單內容") { vm.showingOrderPopup = false; vm.currentPOSViewMode = .onlineOrders; vm.selectedWebOrder = nil }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(UIColor.systemGray5))
                     }.frame(height: 80)
                 }.frame(width: 450, height: 320).background(Color(UIColor.systemBackground)).cornerRadius(20).shadow(radius: 20)
             }
@@ -983,104 +514,34 @@ extension ContentView {
                                 }
                             }
                         }
-                    }.padding(.horizontal)
-                }.padding(.vertical, 20)
-            }
+                    }
+                }.padding(.horizontal)
+            }.padding(.vertical, 20)
             
             Divider()
             
             HStack(spacing: 15) {
                 Button(action: {
                     HapticManager.shared.triggerSuccess()
-                    updateWebOrderState(orderId: order.orderId, newState: "READY")
+                    vm.updateWebOrderState(orderId: order.orderId, newState: "READY")
                 }) {
                     Text("確認入機").font(.title3).fontWeight(.bold).foregroundColor(.white).frame(maxWidth: .infinity, maxHeight: 60).background(Color.blue).cornerRadius(12)
                 }.buttonStyle(JapaneseButtonStyle())
                 
                 Button(action: {
                     HapticManager.shared.triggerLight()
-                    selectedWebOrder = nil
+                    vm.selectedWebOrder = nil
                 }) {
                     Text("回到上一頁").font(.title3).fontWeight(.bold).foregroundColor(.gray).frame(maxWidth: .infinity, maxHeight: 60).background(Color(UIColor.systemGray5)).cornerRadius(12)
                 }.buttonStyle(JapaneseButtonStyle())
                 
                 Button(action: {
                     HapticManager.shared.triggerMedium()
-                    updateWebOrderState(orderId: order.orderId, newState: "CANCELED")
+                    vm.updateWebOrderState(orderId: order.orderId, newState: "CANCELED")
                 }) {
                     Text("取消訂單").font(.title3).fontWeight(.bold).foregroundColor(.white).frame(maxWidth: .infinity, maxHeight: 60).background(Color.red).cornerRadius(12)
                 }.buttonStyle(JapaneseButtonStyle())
             }.padding().background(Color(UIColor.systemBackground))
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-}
-
-// ================= 6. 基礎元件 & 樣式 =================
-
-struct LabeledInfoView: View {
-    let title: String; let value: String
-    var body: some View { HStack { Text("\(title)：").foregroundColor(.gray); Text(value).lineLimit(1).minimumScaleFactor(0.8); Spacer() }.font(.subheadline) }
-}
-
-struct FunctionPageButton: View {
-    let icon: String; let height: CGFloat; let action: () -> Void; let isDisabled: Bool
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.title2).fontWeight(.bold).frame(maxWidth: .infinity, minHeight: height)
-                .background(isDisabled ? Color.gray.opacity(0.1) : Color(UIColor.systemBackground))
-                .foregroundColor(isDisabled ? .gray : .primary).cornerRadius(10)
-        }.disabled(isDisabled).padding(.horizontal, 5)
-    }
-}
-
-struct SquareFunctionButton: View {
-    let title: String; let icon: String; let size: CGFloat; let action: () -> Void; var isCheckout: Bool = false
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 5) {
-                Image(systemName: icon).font(.title2).fontWeight(.bold)
-                Text(title).font(.system(size: 18, weight: .bold)).lineLimit(1).minimumScaleFactor(0.5)
-            }
-            .foregroundColor(isCheckout ? .white : .primary).frame(width: size, height: size)
-            .background(isCheckout ? Color.blue : Color(UIColor.systemBackground))
-            .cornerRadius(10).overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.gray.opacity(0.3), lineWidth: 1))
-        }.buttonStyle(JapaneseButtonStyle())
-    }
-}
-
-struct PageNavigationButtons: View {
-    @Binding var currentPage: Int; let totalPages: Int
-    var body: some View {
-        HStack(spacing: 15) {
-            NavBtn(icon: "arrow.left", active: currentPage > 0) { currentPage -= 1 }
-            NavBtn(icon: "arrow.right", active: currentPage < totalPages - 1) { currentPage += 1 }
-        }
-    }
-    func NavBtn(icon: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.title).fontWeight(.bold).frame(width: 80, height: 50)
-                .background(active ? Color.blue : Color.gray.opacity(0.3)).foregroundColor(.white).cornerRadius(10)
-        }.disabled(!active)
-    }
-}
-
-struct JapaneseButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
-    }
-}
-
-struct HapticManager {
-    static let shared = HapticManager()
-    func triggerLight() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-    func triggerMedium() { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
-    func triggerSuccess() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
-}
-
-class SoundManager {
-    static let shared = SoundManager()
-    func playTap() { AudioServicesPlaySystemSound(1104) }
-    func playPop() { AudioServicesPlaySystemSound(1111) }
-    func playSuccess() { AudioServicesPlaySystemSound(1001) }
 }
