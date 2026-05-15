@@ -92,33 +92,34 @@ class POSViewModel: ObservableObject {
     // ================= 核心功能邏輯 (Logic) =================
     func submitOrder() async {
         guard !cart.isEmpty else { return }
-
-        let itemsToSubmit = cart.map { item in
-            let addons = item.selectedOptions.map { ParsedOrderItem.ParsedAddon(name: $0.name, qty: 1) }
-            return ParsedOrderItem(
-                category: item.menuItem.category,
-                name: item.menuItem.name,
-                qty: item.quantity,
-                addons: addons.isEmpty ? nil : addons
-            )
+        
+        // 🌟 修正 1：轉成字典陣列，而不是事先轉成 JSON 字串
+        let itemsArray = cart.map { item -> [String: Any] in
+            var dict: [String: Any] = [
+                "category": item.menuItem.category,
+                "name": item.menuItem.name,
+                "qty": item.quantity
+            ]
+            let addons = item.selectedOptions.map { ["name": $0.name, "qty": 1] as [String: Any] }
+            if !addons.isEmpty { dict["addons"] = addons }
+            return dict
         }
-
-        guard let jsonData = try? JSONEncoder().encode(itemsToSubmit),
-              let detailsString = String(data: jsonData, encoding: .utf8) else { return }
 
         guard let url = URL(string: API_URL) else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("text/plain;charset=utf-8", forHTTPHeaderField: "Content-Type")
-
+        
+        // 🌟 修正 2：完美對齊 GAS 需要的 Key 值
         let payload: [String: Any] = [
-            "action": "createOrder",
-            "orderId": "iPad-\(Int(Date().timeIntervalSince1970))",
-            "details": detailsString,
-            "type": orderMetadata.transactionType,
+            "action": "newOrder",  // 👈 對應 GAS 技能 1
+            "orderId": "SuPOS-\(Int.random(in: 1000...9999))",
+            "items": itemsArray,   // 👈 GAS 會負責 stringify 這個 items
             "total": cartTotal,
-            "timestamp": ISO8601DateFormatter().string(from: Date())
+            "table": orderMetadata.transactionType, // 👈 放外帶/內用等資訊
+            "status": "READY"      // 👈 告訴後端，這單已經準備好可以直接印了
         ]
+        
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         do {
@@ -130,9 +131,12 @@ class POSViewModel: ObservableObject {
                 HapticManager.shared.triggerSuccess()
                 cancelEntireTransaction()
                 currentPOSViewMode = .manualOrdering
+            } else {
+                print("❌ 伺服器回傳錯誤: \(String(data: data, encoding: .utf8) ?? "")")
             }
             isLoading = false
         } catch {
+            print("🛑 網路錯誤")
             isLoading = false
         }
     }

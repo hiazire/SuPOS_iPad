@@ -48,8 +48,8 @@ struct ContentView: View {
                         LabeledInfoView(title: "發票載具", value: vm.orderMetadata.carrier)
                     }
                 }
-                Text("Version: 26may14_2_rabisu")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                Text("Ver: SuPOS_26may16_2_hermes")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .padding(.top, 2)
             }
