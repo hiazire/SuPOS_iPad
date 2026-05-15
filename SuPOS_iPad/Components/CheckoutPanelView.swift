@@ -103,61 +103,46 @@ struct CheckoutPanelView: View {
         }
     }
 
-    // ================= 底部按鈕列 =================
+// ================= 底部按鈕列 =================
     @ViewBuilder
     private var bottomActionButtons: some View {
         let isCartEmpty = vm.cart.isEmpty
 
         HStack(spacing: 20) {
-            backButton
-            confirmCheckoutButton(isEmpty: isCartEmpty)
+            Button(action: { vm.currentPOSViewMode = .manualOrdering }) {
+                Text("返回修改")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .frame(maxWidth: .infinity, minHeight: 70, maxHeight: 70)
+                    .background(Color.gray)
+                    .foregroundColor(.white)
+                    .cornerRadius(15)
+            }
+            .buttonStyle(JapaneseButtonStyle())
+
+            Button(action: {
+                Task {
+                    await vm.submitOrder()
+                }
+            }) {
+                HStack {
+                    if vm.isLoading {
+                        ProgressView().tint(.white).padding(.trailing, 10)
+                    }
+                    Text(vm.isLoading ? "正在送單..." : "確認結帳 ($\(vm.cartTotal))")
+                }
+                .font(.title2)
+                .fontWeight(.bold)
+                .frame(maxWidth: .infinity, minHeight: 70, maxHeight: 70)
+                .background(vm.isLoading ? Color.gray : Color.green)
+                .foregroundColor(.white)
+                .cornerRadius(15)
+            }
+            .buttonStyle(JapaneseButtonStyle())
+            .disabled(isCartEmpty || vm.isLoading)
+            .opacity((isCartEmpty || vm.isLoading) ? 0.5 : 1.0)
         }
         .padding(20)
-    }
-
-    @ViewBuilder
-    private var backButton: some View {
-        Button(action: { vm.currentPOSViewMode = .manualOrdering }) {
-            backButtonLabel
-        }
-        .buttonStyle(JapaneseButtonStyle())
-    }
-
-    @ViewBuilder
-    private var backButtonLabel: some View {
-        Text("返回修改")
-            .font(.title2)
-            .fontWeight(.bold)
-            .frame(maxWidth: .infinity, minHeight: 70, maxHeight: 70)  // ⬅️ 改用 minHeight/maxHeight
-            .background(Color(UIColor.systemGray))                      // ⬅️ 改用 UIColor 包裝
-            .foregroundColor(Color(UIColor.white))
-            .cornerRadius(15)
-    }
-
-    @ViewBuilder
-    private func confirmCheckoutButton(isEmpty: Bool) -> some View {
-        Button(action: {
-            HapticManager.shared.triggerSuccess()
-            SoundManager.shared.playSuccess()
-            vm.cancelEntireTransaction()
-            vm.currentPOSViewMode = .manualOrdering
-        }) {
-            confirmCheckoutLabel(isEmpty: isEmpty)
-        }
-        .buttonStyle(JapaneseButtonStyle())
-        .disabled(isEmpty)
-        .opacity(isEmpty ? 0.5 : 1.0)
-    }
-
-    @ViewBuilder
-    private func confirmCheckoutLabel(isEmpty: Bool) -> some View {
-        Text("確認結帳 ($\(vm.cartTotal))")
-            .font(.title2)
-            .fontWeight(.bold)
-            .frame(maxWidth: .infinity, minHeight: 70, maxHeight: 70)  // ⬅️ 改用 minHeight/maxHeight
-            .background(Color(UIColor.systemGreen))                     // ⬅️ 改用 UIColor 包裝
-            .foregroundColor(Color(UIColor.white))
-            .cornerRadius(15)
     }
 
     @ViewBuilder

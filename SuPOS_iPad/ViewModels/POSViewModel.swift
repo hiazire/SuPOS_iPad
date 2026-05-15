@@ -90,6 +90,53 @@ class POSViewModel: ObservableObject {
     }
 
     // ================= 核心功能邏輯 (Logic) =================
+    func submitOrder() async {
+        guard !cart.isEmpty else { return }
+
+        let itemsToSubmit = cart.map { item in
+            let addons = item.selectedOptions.map { ParsedOrderItem.ParsedAddon(name: $0.name, qty: 1) }
+            return ParsedOrderItem(
+                category: item.menuItem.category,
+                name: item.menuItem.name,
+                qty: item.quantity,
+                addons: addons.isEmpty ? nil : addons
+            )
+        }
+
+        guard let jsonData = try? JSONEncoder().encode(itemsToSubmit),
+              let detailsString = String(data: jsonData, encoding: .utf8) else { return }
+
+        guard let url = URL(string: API_URL) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("text/plain;charset=utf-8", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = [
+            "action": "createOrder",
+            "orderId": "iPad-\(Int(Date().timeIntervalSince1970))",
+            "details": detailsString,
+            "type": orderMetadata.transactionType,
+            "total": cartTotal,
+            "timestamp": ISO8601DateFormatter().string(from: Date())
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        do {
+            isLoading = true
+            let (data, _) = try await URLSession.shared.data(for: request)
+            if let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let success = response["success"] as? Bool, success {
+                SoundManager.shared.playSuccess()
+                HapticManager.shared.triggerSuccess()
+                cancelEntireTransaction()
+                currentPOSViewMode = .manualOrdering
+            }
+            isLoading = false
+        } catch {
+            isLoading = false
+        }
+    }
+
     func checkNewWebOrders() async {
         guard let url = URL(string: API_URL) else { return }
         var request = URLRequest(url: url)
