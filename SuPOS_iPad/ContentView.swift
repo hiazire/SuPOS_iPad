@@ -48,7 +48,7 @@ struct ContentView: View {
                         LabeledInfoView(title: "發票載具", value: vm.orderMetadata.carrier)
                     }
                 }
-                Text("Ver: SuPOS_26may16_2_hermes")
+                Text("Ver: SuPOS_26may17_1_hermes")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .padding(.top, 2)
@@ -471,16 +471,22 @@ extension ContentView {
     }
     
     @ViewBuilder
+
     func OrderDetailContentView(order: WebOrder) -> some View {
         let parsedData = order.details.data(using: .utf8) ?? Data()
         let items: [ParsedOrderItem] = (try? JSONDecoder().decode([ParsedOrderItem].self, from: parsedData)) ?? []
         let groupedItems = Dictionary(grouping: items, by: { $0.category ?? "其他" })
-
         VStack(spacing: 0) {
             HStack(spacing: 20) {
                 Text("單號：\(order.orderId)").font(.title2).fontWeight(.black)
                 Text("時間：\(order.timestamp)").font(.headline).foregroundColor(.gray)
                 Spacer()
+                
+                // 🌟 新增：金流狀態標籤
+                Text(order.paymentStatus == "PAID" ? "已結帳" : "未結帳")
+                    .font(.headline).fontWeight(.bold).foregroundColor(.white)
+                    .padding(.horizontal, 15).padding(.vertical, 8)
+                    .background(order.paymentStatus == "PAID" ? Color.green : Color.red).cornerRadius(10)
                 Text(order.state == "PENDING" ? "等待入機" : order.state)
                     .font(.headline).fontWeight(.bold).foregroundColor(.white)
                     .padding(.horizontal, 15).padding(.vertical, 8)
@@ -490,6 +496,7 @@ extension ContentView {
             Divider()
             
             ScrollView {
+                
                 VStack(alignment: .leading, spacing: 25) {
                     ForEach(groupedItems.keys.sorted(), id: \.self) { category in
                         VStack(alignment: .leading, spacing: 12) {
@@ -517,28 +524,36 @@ extension ContentView {
                     }
                 }.padding(.horizontal)
             }.padding(.vertical, 20)
-            
             Divider()
-            
             HStack(spacing: 15) {
+                
+                // 🌟 新增：帶入結帳按鈕 (僅未結帳且未取消時顯示)
+                if order.paymentStatus != "PAID" && order.state != "CANCELED" {
+                    Button(action: {
+                        HapticManager.shared.triggerSuccess()
+                        vm.prepareWebOrderForCheckout(order: order)
+                    }) {
+                        Text("帶入結帳").font(.title3).fontWeight(.bold).foregroundColor(.white).frame(maxWidth: .infinity, maxHeight: 60).background(Color.orange).cornerRadius(12)
+                    }.buttonStyle(JapaneseButtonStyle())
+                }
                 Button(action: {
                     HapticManager.shared.triggerSuccess()
                     vm.updateWebOrderState(orderId: order.orderId, newState: "READY")
                 }) {
                     Text("確認入機").font(.title3).fontWeight(.bold).foregroundColor(.white).frame(maxWidth: .infinity, maxHeight: 60).background(Color.blue).cornerRadius(12)
                 }.buttonStyle(JapaneseButtonStyle())
-                
                 Button(action: {
                     HapticManager.shared.triggerLight()
                     vm.selectedWebOrder = nil
                 }) {
                     Text("回到上一頁").font(.title3).fontWeight(.bold).foregroundColor(.gray).frame(maxWidth: .infinity, maxHeight: 60).background(Color(UIColor.systemGray5)).cornerRadius(12)
+                    
                 }.buttonStyle(JapaneseButtonStyle())
-                
                 Button(action: {
                     HapticManager.shared.triggerMedium()
                     vm.updateWebOrderState(orderId: order.orderId, newState: "CANCELED")
                 }) {
+                    
                     Text("取消訂單").font(.title3).fontWeight(.bold).foregroundColor(.white).frame(maxWidth: .infinity, maxHeight: 60).background(Color.red).cornerRadius(12)
                 }.buttonStyle(JapaneseButtonStyle())
             }.padding().background(Color(UIColor.systemBackground))

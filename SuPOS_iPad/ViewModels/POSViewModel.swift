@@ -18,8 +18,9 @@ class POSViewModel: ObservableObject {
     @Published var selectedDateFilter: OrderDateFilter = .today
     @Published var incomingOrder: WebOrder? = nil
     @Published var showingOrderPopup: Bool = false
-    @Published var webOrderPage: Int = 0
     @Published var selectedWebOrder: WebOrder? = nil
+    @Published var activeWebOrderId: String = ""
+    @Published var webOrderPage: Int = 0
     @Published var tempSavedOrders: [TempOrder] = []
     
     @Published var menuItems: [MenuItem] = []
@@ -112,12 +113,13 @@ class POSViewModel: ObservableObject {
         
         // 🌟 修正 2：完美對齊 GAS 需要的 Key 值
         let payload: [String: Any] = [
-            "action": "newOrder",  // 👈 對應 GAS 技能 1
+            "action": "newOrder",
             "orderId": "SuPOS-\(Int.random(in: 1000...9999))",
-            "items": itemsArray,   // 👈 GAS 會負責 stringify 這個 items
+            "items": itemsArray,
             "total": cartTotal,
-            "table": orderMetadata.transactionType, // 👈 放外帶/內用等資訊
-            "status": "READY"      // 👈 告訴後端，這單已經準備好可以直接印了
+            "table": orderMetadata.transactionType,
+            "status": "READY",
+            "paymentStatus": "PAID" // 👈 新增財務狀態，現場結帳預設為 PAID
         ]
         
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
@@ -300,5 +302,67 @@ class POSViewModel: ObservableObject {
             req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
             _ = try? await URLSession.shared.data(for: req)
         }
+    }
+
+    // 將網頁訂單帶入結帳畫面
+
+    func prepareWebOrderForCheckout(order: WebOrder) {
+
+        self.activeWebOrderId = order.orderId
+
+        self.cart.removeAll()
+
+
+
+        let parsedData = order.details.data(using: .utf8) ?? Data()
+
+        let items: [ParsedOrderItem] = (try? JSONDecoder().decode([ParsedOrderItem].self, from: parsedData)) ?? []
+
+
+
+        for pItem in items {
+
+            // 根據名稱找回原始 MenuItem
+
+            if let menuItem = self.menuItems.first(where: { $0.name == pItem.name }) {
+
+                var options: [OptionItem] = []
+
+                
+
+                // 還原客製化選項
+
+                if let addons = pItem.addons {
+
+                    for addon in addons {
+
+                        if let opt = self.allOptions.first(where: { $0.name == addon.name }) {
+
+                            let count = addon.qty ?? 1
+
+                            for _ in 0..<count { options.append(opt) }
+
+                        }
+
+                    }
+
+                }
+
+                
+
+                let cartItem = CartItem(menuItem: menuItem, quantity: pItem.qty, selectedOptions: options)
+
+                self.cart.append(cartItem)
+
+            }
+
+        }
+
+        
+
+        // 切換至結帳畫面
+
+        self.currentPOSViewMode = .checkout
+
     }
 }

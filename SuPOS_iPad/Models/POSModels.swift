@@ -35,6 +35,7 @@ struct WebOrder: Identifiable, Codable, Hashable {
     let timestamp: String
     let details: String
     var state: String
+    var paymentStatus: String? // 👈 新增：用於記錄 UNPAID 或 PAID
 }
 
 struct WebOrderResponse: Codable {
