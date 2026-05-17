@@ -81,6 +81,7 @@ enum POSViewMode {
     case checkout
     case onlineOrders
     case tempOrders
+    case dailyTurnover // 日營業額模式
 }
 
 enum OrderDateFilter: String, CaseIterable {
@@ -119,4 +120,21 @@ struct OrderMetadata {
     var invoiceNumber: String = ""
     var ubn: String = ""
     var carrier: String = ""
+}
+
+
+struct HistoryOrder: Codable, Identifiable {
+    var id: String { orderId }
+    let orderId: String
+    let timestamp: String
+    let details: String
+    let state: String
+    let totalAmount: Double     // GAS 補上的總金額
+    let paymentStatus: String   // 雙維度狀態：PAID / UNPAID
+}
+
+
+struct HistoryResponse: Codable {
+    let success: Bool
+    let orders: [HistoryOrder]
 }

@@ -28,6 +28,7 @@ class POSViewModel: ObservableObject {
     @Published var categories: [String] = []
     @Published var cart: [CartItem] = []
     @Published var isLoading = true
+    @Published var historyOrders: [HistoryOrder] = []
     
     @Published var selectedCategory: String? = nil
     @Published var selectedItemForOptions: MenuItem? = nil
@@ -55,13 +56,40 @@ class POSViewModel: ObservableObject {
         return formatter.string(from: date)
     }
 
+    // 自動計算今日營業額
+    var todayTurnover: Double {
+            let formatter = DateFormatter()
+            let now = Date()
+            
+            return historyOrders.filter { order in
+                // 條件 1：必須是已結帳 PAID
+                guard order.paymentStatus == "PAID" else { return false }
+                
+                // 條件 2：必須是今天
+                let dateStr = order.timestamp
+                formatter.dateFormat = "yyyy/MM/dd"
+                if dateStr.contains(formatter.string(from: now)) { return true }
+                formatter.dateFormat = "yyyy-MM-dd"
+                if dateStr.contains(formatter.string(from: now)) { return true }
+                
+                return false
+            }.reduce(0.0) { $0 + $1.totalAmount }
+        }
+
     var allFunctionButtons: [FuncButton] {
         [
             FuncButton(title: "", icon: "plus", action: { self.adjustQuantity(ofSelected: 1) }),
             FuncButton(title: "", icon: "minus", action: { self.adjustQuantity(ofSelected: -1) }),
             FuncButton(title: "訂單暫存", icon: "tray.and.arrow.down", action: { self.saveCurrentOrderToTemp() }),
             FuncButton(title: "暫存區", icon: "tray.full", action: { self.currentPOSViewMode = .tempOrders; self.selectedItemForOptions = nil }),
+            
+            FuncButton(title: "手動點餐", icon: "hand.tap", action: { self.currentPOSViewMode = .manualOrdering }),
             FuncButton(title: "手動點餐", icon: "square.grid.3x3.fill", action: { self.currentPOSViewMode = .manualOrdering; self.selectedItemForOptions = nil }),
+            
+            FuncButton(title: "歷史訂單", icon: "clock.arrow.circlepath", action: { self.currentPOSViewMode = .transactionHistory }),
+            // 「日營業額」的按鈕資料
+            FuncButton(title: "日營業額", icon: "chart.bar.doc.horizontal", action: {
+                self.currentPOSViewMode = .dailyTurnover}),
             FuncButton(title: orderMetadata.transactionType, icon: "bag", action: { self.toggleTransactionType() }),
             FuncButton(title: "刪除商品", icon: "trash", action: { self.deleteSelectedCartItem() }),
             FuncButton(title: "取消交易", icon: "xmark.circle", action: { self.cancelEntireTransaction() }),
@@ -71,7 +99,8 @@ class POSViewModel: ObservableObject {
                 self.currentPOSViewMode = .transactionHistory
                 self.selectedItemForOptions = nil
                 Task { await self.fetchHistoryFromCloud() }
-            })
+            }),
+            FuncButton(title: "日營業額", icon: "chart.bar.fill", action: { self.currentPOSViewMode = .dailyTurnover })
         ]
     }
 
@@ -279,7 +308,7 @@ class POSViewModel: ObservableObject {
             cart[idx].selectedOptions.append(option)
         }
     }
-
+    
     func fetchMenuData() async {
         guard let url = URL(string: API_URL) else { return }
         do {
@@ -290,7 +319,7 @@ class POSViewModel: ObservableObject {
             self.isLoading = false
         } catch { self.isLoading = false }
     }
-
+    
     func updateWebOrderState(orderId: String, newState: String) {
         showingOrderPopup = false; incomingOrder = nil; selectedWebOrder = nil
         if let idx = webOrders.firstIndex(where: { $0.orderId == orderId }) { webOrders[idx].state = newState }
@@ -303,66 +332,56 @@ class POSViewModel: ObservableObject {
             _ = try? await URLSession.shared.data(for: req)
         }
     }
-
-    // 將網頁訂單帶入結帳畫面
-
-    func prepareWebOrderForCheckout(order: WebOrder) {
-
-        self.activeWebOrderId = order.orderId
-
-        self.cart.removeAll()
-
-
-
-        let parsedData = order.details.data(using: .utf8) ?? Data()
-
-        let items: [ParsedOrderItem] = (try? JSONDecoder().decode([ParsedOrderItem].self, from: parsedData)) ?? []
-
-
-
-        for pItem in items {
-
-            // 根據名稱找回原始 MenuItem
-
-            if let menuItem = self.menuItems.first(where: { $0.name == pItem.name }) {
-
-                var options: [OptionItem] = []
-
-                
-
-                // 還原客製化選項
-
-                if let addons = pItem.addons {
-
-                    for addon in addons {
-
-                        if let opt = self.allOptions.first(where: { $0.name == addon.name }) {
-
-                            let count = addon.qty ?? 1
-
-                            for _ in 0..<count { options.append(opt) }
-
-                        }
-
-                    }
-
-                }
-
-                
-
-                let cartItem = CartItem(menuItem: menuItem, quantity: pItem.qty, selectedOptions: options)
-
-                self.cart.append(cartItem)
-
-            }
-
-        }
-
+    
+    // 📡 抓取歷史訂單
+    func fetchHistoryOrders() async {
+        guard let url = URL(string: API_URL) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("text/plain;charset=utf-8", forHTTPHeaderField: "Content-Type")
         
-
+        let payload: [String: Any] = ["action": "getHistoryOrders", "days": 1]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            if let response = try? JSONDecoder().decode(HistoryResponse.self, from: data), response.success {
+                await MainActor.run {
+                    self.historyOrders = response.orders
+                }
+            }
+        } catch {
+            print("抓取歷史訂單失敗: \(error)")
+        }
+    }
+    
+    // 將網頁訂單帶入結帳畫面
+    func prepareWebOrderForCheckout(order: WebOrder) {
+        self.activeWebOrderId = order.orderId
+        self.cart.removeAll()
+        let parsedData = order.details.data(using: .utf8) ?? Data()
+        let items: [ParsedOrderItem] = (try? JSONDecoder().decode([ParsedOrderItem].self, from: parsedData)) ?? []
+        for pItem in items {
+            // 根據名稱找回原始 MenuItem
+            if let menuItem = self.menuItems.first(where: { $0.name == pItem.name }) {
+                var options: [OptionItem] = []
+                
+                // 還原客製化選項
+                if let addons = pItem.addons {
+                    for addon in addons {
+                        if let opt = self.allOptions.first(where: { $0.name == addon.name }) {
+                            let count = addon.qty ?? 1
+                            for _ in 0..<count { options.append(opt) }
+                        }
+                    }
+                }
+                
+                let cartItem = CartItem(menuItem: menuItem, quantity: pItem.qty, selectedOptions: options)
+                self.cart.append(cartItem)
+            }
+        }
+        
         // 切換至結帳畫面
-
         self.currentPOSViewMode = .checkout
-
     }
 }

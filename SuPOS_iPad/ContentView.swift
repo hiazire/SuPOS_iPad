@@ -171,6 +171,7 @@ struct ContentView: View {
                     case .onlineOrders: OnlineOrdersPanel(size: geo.size)
                     case .tempOrders: TempOrdersPanelView()
                     case .checkout: CheckoutPanelView(vm: vm, size: geo.size)
+                    case .dailyTurnover: DailyTurnoverPanelView(size: geo.size)
                     }
                 }
             }
@@ -471,7 +472,6 @@ extension ContentView {
     }
     
     @ViewBuilder
-
     func OrderDetailContentView(order: WebOrder) -> some View {
         let parsedData = order.details.data(using: .utf8) ?? Data()
         let items: [ParsedOrderItem] = (try? JSONDecoder().decode([ParsedOrderItem].self, from: parsedData)) ?? []
@@ -558,5 +558,41 @@ extension ContentView {
                 }.buttonStyle(JapaneseButtonStyle())
             }.padding().background(Color(UIColor.systemBackground))
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    
+    // ================= 日營業額統計面板 =================
+    @ViewBuilder
+    func DailyTurnoverPanelView(size: CGSize) -> some View {
+        VStack(alignment: .leading, spacing: 25) {
+            Text("日營業額統計")
+                .font(.title)
+                .fontWeight(.bold)
+            Divider()
+            
+            VStack(spacing: 20) {
+                HStack {
+                    Text("今日營業額：").font(.title2)
+                    Spacer()
+                    Text("$\(Int(vm.todayTurnover))")
+                        .font(.system(size: 48, weight: .black))
+                        .foregroundColor(.blue)
+                }
+                HStack { Text("現金：").font(.title2); Spacer(); Text("-").font(.title2).foregroundColor(.gray) }
+                HStack { Text("Uber Eats：").font(.title2); Spacer(); Text("-").font(.title2).foregroundColor(.gray) }
+                HStack { Text("FoodPanda：").font(.title2); Spacer(); Text("-").font(.title2).foregroundColor(.gray) }
+            }
+            .padding(25)
+            .background(Color(UIColor.systemGray6))
+            .cornerRadius(15)
+            
+            Spacer()
+        }
+        .padding(30)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(UIColor.systemBackground))
+        .onAppear {
+            // 畫面一出現就自動呼叫 ViewModel 去抓歷史訂單
+            Task { await vm.fetchHistoryOrders() }
+        }
     }
 }
