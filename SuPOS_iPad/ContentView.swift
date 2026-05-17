@@ -198,20 +198,22 @@ extension ContentView {
     @ViewBuilder
     func CategoryPagingGrid(size: CGSize) -> some View {
         let itemsPerPage = 20
+        let spacing: CGFloat = 15 // 🌟 統一設定間距大小
         let totalPages = max(1, Int(ceil(Double(vm.categories.count) / Double(itemsPerPage))))
-        let squareSize = floor(min((size.width - 90) / 5, (size.height - 140) / 4))
+        // 算出扣除所有間距後的完美正方形大小 (5 個按鍵會有 6 個間距)
+        let squareSize = floor(min((size.width - (spacing * 6)) / 5, (size.height - 140) / 4))
 
         VStack(spacing: 0) {
-            Text("請選擇餐點分類").font(.title).fontWeight(.bold).frame(height: 60)
             GeometryReader { geo in
                 HStack(spacing: 0) {
                     ForEach(0..<totalPages, id: \.self) { pageIdx in
                         let start = pageIdx * itemsPerPage
                         let end = min(start + itemsPerPage, vm.categories.count)
-                        let columns = Array(repeating: GridItem(.fixed(squareSize), spacing: 15), count: 5)
-                        VStack {
-                            Spacer(minLength: 0)
-                            LazyVGrid(columns: columns, spacing: 15) {
+                        let columns = Array(repeating: GridItem(.fixed(squareSize), spacing: spacing), count: 5)
+                        
+                        VStack(spacing: 0) {
+                            // 🚀 拿掉原本這裡的 Spacer
+                            LazyVGrid(columns: columns, spacing: spacing) {
                                 ForEach(vm.categories[start..<end], id: \.self) { cat in
                                     Button(action: { vm.selectedCategory = cat; vm.itemPage = 0 }) {
                                         Text(cat).font(.title3).fontWeight(.bold).foregroundColor(.white).frame(width: squareSize, height: squareSize)
@@ -220,9 +222,10 @@ extension ContentView {
                                     }.buttonStyle(JapaneseButtonStyle())
                                 }
                             }
-                            .padding(.horizontal, 15)
-                            Spacer(minLength: 0)
-                        }.frame(width: geo.size.width, height: geo.size.height)
+                            .padding(spacing) // 🌟 讓最外圈的距離 = 按鍵之間的間距
+                            
+                            Spacer(minLength: 0) // 🌟 把剩下的空間留在底部，將網格往上推
+                        }.frame(width: geo.size.width, height: geo.size.height, alignment: .top) // 確保從頂部開始排
                     }
                 }
                 .offset(x: -CGFloat(vm.categoryPage) * geo.size.width)
@@ -240,8 +243,9 @@ extension ContentView {
     func ItemPagingGrid(category: String, size: CGSize) -> some View {
         let items = vm.menuItems.filter { $0.category == category }
         let itemsPerPage = 20
+        let spacing: CGFloat = 15 // 🌟 統一設定間距大小
         let totalPages = max(1, Int(ceil(Double(items.count) / Double(itemsPerPage))))
-        let squareSize = floor(min((size.width - 90) / 5, (size.height - 140) / 4))
+        let squareSize = floor(min((size.width - (spacing * 6)) / 5, (size.height - 140) / 4))
 
         VStack(spacing: 0) {
             HStack {
@@ -256,10 +260,11 @@ extension ContentView {
                     ForEach(0..<totalPages, id: \.self) { pageIdx in
                         let start = pageIdx * itemsPerPage
                         let end = min(start + itemsPerPage, items.count)
-                        let columns = Array(repeating: GridItem(.fixed(squareSize), spacing: 15), count: 5)
-                        VStack {
-                            Spacer(minLength: 0)
-                            LazyVGrid(columns: columns, spacing: 15) {
+                        let columns = Array(repeating: GridItem(.fixed(squareSize), spacing: spacing), count: 5)
+                        
+                        VStack(spacing: 0) {
+                            // 🚀 拿掉原本這裡的 Spacer
+                            LazyVGrid(columns: columns, spacing: spacing) {
                                 ForEach(items[start..<end]) { item in
                                     Button(action: { vm.handleItemTap(item: item) }) {
                                         VStack {
@@ -271,9 +276,10 @@ extension ContentView {
                                     }.buttonStyle(JapaneseButtonStyle())
                                 }
                             }
-                            .padding(.horizontal, 15)
-                            Spacer(minLength: 0)
-                        }.frame(width: geo.size.width, height: geo.size.height)
+                            .padding(spacing) // 🌟 讓最外圈的距離 = 按鍵之間的間距
+                            
+                            Spacer(minLength: 0) // 🌟 把剩下的空間留在底部
+                        }.frame(width: geo.size.width, height: geo.size.height, alignment: .top) // 確保從頂部開始排
                     }
                 }
                 .offset(x: -CGFloat(vm.itemPage) * geo.size.width)
