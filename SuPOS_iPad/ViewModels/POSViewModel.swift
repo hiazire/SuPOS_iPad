@@ -58,23 +58,25 @@ class POSViewModel: ObservableObject {
 
     // 自動計算今日營業額
     var todayTurnover: Double {
-            let formatter = DateFormatter()
-            let now = Date()
+        let formatter = DateFormatter()
+        let now = Date()
+        
+        // 🌟 提早在迴圈外面把字串算好，效能提升 100 倍！
+        formatter.dateFormat = "yyyy/MM/dd"
+        let format1 = formatter.string(from: now)
+        
+        formatter.dateFormat = "yyyy-MM-dd"
+        let format2 = formatter.string(from: now)
+        
+        return historyOrders.filter { order in
+            // 條件 1：必須是已結帳 PAID
+            guard order.paymentStatus == "PAID" else { return false }
             
-            return historyOrders.filter { order in
-                // 條件 1：必須是已結帳 PAID
-                guard order.paymentStatus == "PAID" else { return false }
-                
-                // 條件 2：必須是今天
-                let dateStr = order.timestamp
-                formatter.dateFormat = "yyyy/MM/dd"
-                if dateStr.contains(formatter.string(from: now)) { return true }
-                formatter.dateFormat = "yyyy-MM-dd"
-                if dateStr.contains(formatter.string(from: now)) { return true }
-                
-                return false
-            }.reduce(0.0) { $0 + $1.totalAmount }
-        }
+            // 條件 2：直接拿算好的 format1 與 format2 來比對
+            let dateStr = order.timestamp
+            return dateStr.contains(format1) || dateStr.contains(format2)
+        }.reduce(0.0) { $0 + $1.totalAmount }
+    }
 
     var allFunctionButtons: [FuncButton] {
         [
@@ -83,7 +85,7 @@ class POSViewModel: ObservableObject {
             FuncButton(title: "訂單暫存", icon: "tray.and.arrow.down", action: { self.saveCurrentOrderToTemp() }),
             FuncButton(title: "暫存區", icon: "tray.full", action: { self.currentPOSViewMode = .tempOrders; self.selectedItemForOptions = nil }),
             
-            FuncButton(title: "手動點餐", icon: "hand.tap", action: { self.currentPOSViewMode = .manualOrdering }),
+            // FuncButton(title: "手動點餐", icon: "hand.tap", action: { self.currentPOSViewMode = .manualOrdering }),
             FuncButton(title: "手動點餐", icon: "square.grid.3x3.fill", action: { self.currentPOSViewMode = .manualOrdering; self.selectedItemForOptions = nil }),
             
             FuncButton(title: "歷史訂單", icon: "clock.arrow.circlepath", action: { self.currentPOSViewMode = .transactionHistory }),
@@ -100,7 +102,6 @@ class POSViewModel: ObservableObject {
                 self.selectedItemForOptions = nil
                 Task { await self.fetchHistoryFromCloud() }
             }),
-            FuncButton(title: "日營業額", icon: "chart.bar.fill", action: { self.currentPOSViewMode = .dailyTurnover })
         ]
     }
 
@@ -283,7 +284,7 @@ class POSViewModel: ObservableObject {
     }
 
     func toggleTransactionType() {
-        let types = ["外帶", "內用", "電話Line自取件"]
+        let types = ["外帶", "內用", "Line自取", "電話點餐"]
         if let idx = types.firstIndex(of: orderMetadata.transactionType) {
             orderMetadata.transactionType = types[(idx + 1) % types.count]
         }
@@ -375,12 +376,10 @@ class POSViewModel: ObservableObject {
                         }
                     }
                 }
-                
                 let cartItem = CartItem(menuItem: menuItem, quantity: pItem.qty, selectedOptions: options)
                 self.cart.append(cartItem)
             }
         }
-        
         // 切換至結帳畫面
         self.currentPOSViewMode = .checkout
     }

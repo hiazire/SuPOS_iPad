@@ -48,7 +48,7 @@ struct ContentView: View {
                         LabeledInfoView(title: "發票載具", value: vm.orderMetadata.carrier)
                     }
                 }
-                Text("Ver: SuPOS_26may19_1_hermes")
+                Text("Ver: SuPOS_26may19_2_rabi")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .padding(.top, 2)
@@ -599,35 +599,35 @@ extension ContentView {
     @ViewBuilder
     func HeaderView(selectedWebOrder: WebOrder?, onBack: @escaping () -> Void) -> some View {
         HStack {
-            if selectedWebOrder != nil {
-                Button(action: onBack) {
-                    HStack { Image(systemName: "chevron.left"); Text("返回列表") }
-                    .font(.title3).fontWeight(.bold).padding(10).background(Color.gray.opacity(0.15)).cornerRadius(8)
-                }
-            }
+            // 🚫 移除「返回列表」按鍵，避免畫面重複衝突
             Spacer()
             Text(selectedWebOrder == nil ? "今日線上訂單" : "訂單詳細內容").font(.title).fontWeight(.bold)
             Spacer()
             Color.clear.frame(width: 100, height: 10)
         }.padding().frame(height: 70)
     }
+
     
     @ViewBuilder
     func OrderDetailContentView(order: WebOrder) -> some View {
         let parsedData = order.details.data(using: .utf8) ?? Data()
         let items: [ParsedOrderItem] = (try? JSONDecoder().decode([ParsedOrderItem].self, from: parsedData)) ?? []
         let groupedItems = Dictionary(grouping: items, by: { $0.category ?? "其他" })
+        
+        // 🌟 1. 提早把排序好的陣列抽出來，減輕 ForEach 的推理負擔
+        let sortedCategories = groupedItems.keys.sorted()
+        
         VStack(spacing: 0) {
             HStack(spacing: 20) {
                 Text("單號：\(order.orderId)").font(.title2).fontWeight(.black)
                 Text("時間：\(order.timestamp)").font(.headline).foregroundColor(.gray)
                 Spacer()
                 
-                // 🌟 新增：金流狀態標籤
                 Text(order.paymentStatus == "PAID" ? "已結帳" : "未結帳")
                     .font(.headline).fontWeight(.bold).foregroundColor(.white)
                     .padding(.horizontal, 15).padding(.vertical, 8)
                     .background(order.paymentStatus == "PAID" ? Color.green : Color.red).cornerRadius(10)
+                
                 Text(order.state == "PENDING" ? "等待入機" : order.state)
                     .font(.headline).fontWeight(.bold).foregroundColor(.white)
                     .padding(.horizontal, 15).padding(.vertical, 8)
@@ -637,38 +637,23 @@ extension ContentView {
             Divider()
             
             ScrollView {
-                
                 VStack(alignment: .leading, spacing: 25) {
-                    ForEach(groupedItems.keys.sorted(), id: \.self) { category in
+                    ForEach(sortedCategories, id: \.self) { category in
                         VStack(alignment: .leading, spacing: 12) {
                             Text("【\(category)】").font(.title3).fontWeight(.heavy).foregroundColor(.blue)
                             if let categoryItems = groupedItems[category] {
                                 ForEach(categoryItems, id: \.self) { item in
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        HStack(alignment: .top) {
-                                            Text(item.name).font(.headline).fontWeight(.bold)
-                                            Spacer()
-                                            Text("- \(item.qty)").font(.title3).fontWeight(.black)
-                                        }
-                                        if let addons = item.addons, !addons.isEmpty {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                ForEach(addons, id: \.self) { addon in
-                                                    let qtyText = (addon.qty ?? 1) > 1 ? " x\(addon.qty!)" : ""
-                                                    Text("  - \(addon.name)\(qtyText)").font(.subheadline).foregroundColor(.gray)
-                                                }
-                                            }
-                                        }
-                                    }.padding(.leading, 10).padding(.bottom, 5)
+                                    OrderDetailItemRow(item: item, vm: vm)
                                 }
                             }
                         }
                     }
                 }.padding(.horizontal)
             }.padding(.vertical, 20)
+            
             Divider()
+            
             HStack(spacing: 15) {
-                
-                // 🌟 新增：帶入結帳按鈕 (僅未結帳且未取消時顯示)
                 if order.paymentStatus != "PAID" && order.state != "CANCELED" {
                     Button(action: {
                         HapticManager.shared.triggerSuccess()
@@ -677,29 +662,75 @@ extension ContentView {
                         Text("帶入結帳").font(.title3).fontWeight(.bold).foregroundColor(.white).frame(maxWidth: .infinity, maxHeight: 60).background(Color.orange).cornerRadius(12)
                     }.buttonStyle(JapaneseButtonStyle())
                 }
+                
                 Button(action: {
                     HapticManager.shared.triggerSuccess()
                     vm.updateWebOrderState(orderId: order.orderId, newState: "READY")
                 }) {
                     Text("確認入機").font(.title3).fontWeight(.bold).foregroundColor(.white).frame(maxWidth: .infinity, maxHeight: 60).background(Color.blue).cornerRadius(12)
                 }.buttonStyle(JapaneseButtonStyle())
+                
                 Button(action: {
                     HapticManager.shared.triggerLight()
                     vm.selectedWebOrder = nil
+                    if order.paymentStatus == "PAID" || order.state == "CANCELED" {
+                        vm.currentPOSViewMode = .transactionHistory
+                    }
                 }) {
                     Text("回到上一頁").font(.title3).fontWeight(.bold).foregroundColor(.gray).frame(maxWidth: .infinity, maxHeight: 60).background(Color(UIColor.systemGray5)).cornerRadius(12)
-                    
                 }.buttonStyle(JapaneseButtonStyle())
+                
                 Button(action: {
                     HapticManager.shared.triggerMedium()
                     vm.updateWebOrderState(orderId: order.orderId, newState: "CANCELED")
                 }) {
-                    
                     Text("取消訂單").font(.title3).fontWeight(.bold).foregroundColor(.white).frame(maxWidth: .infinity, maxHeight: 60).background(Color.red).cornerRadius(12)
                 }.buttonStyle(JapaneseButtonStyle())
             }.padding().background(Color(UIColor.systemBackground))
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+
+    // 專門用來處理每一列餐點顯示的子視圖
+    @ViewBuilder
+    func OrderDetailItemRow(item: ParsedOrderItem, vm: POSViewModel) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name).font(.headline).fontWeight(.bold)
+                    
+                    // 🌟 聰明比對：拿訂單的「餐點名稱」去 POS 菜單庫裡面查價格
+                    let matchedItem = vm.menuItems.first(where: { $0.name == item.name })
+                    let itemPrice = matchedItem?.price ?? 0
+                    
+                    Text("$\(itemPrice)").font(.subheadline).foregroundColor(.secondary)
+                }
+                Spacer()
+                Text("x \(item.qty)").font(.title3).fontWeight(.black).foregroundColor(.blue)
+            }
+            
+            if let addons = item.addons, !addons.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(addons, id: \.self) { addon in
+                        let qtyText = (addon.qty ?? 1) > 1 ? " x\(addon.qty!)" : ""
+                        
+                        // 🌟 聰明比對：拿訂單的「選項名稱」去 POS 客製化選項庫裡面查價格
+                        let matchedOption = vm.allOptions.first(where: { $0.name == addon.name })
+                        let addonPrice = matchedOption?.price ?? 0
+                        let priceText = addonPrice > 0 ? " (+\(addonPrice)元)" : ""
+                        
+                        Text("  - \(addon.name)\(qtyText)\(priceText)")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
+                }
+            }
+        }
+        .padding(.leading, 10)
+        .padding(.bottom, 5)
+    }
+
+
+
     
     // ================= 日營業額統計面板 =================
     @ViewBuilder
