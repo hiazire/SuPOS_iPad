@@ -48,7 +48,7 @@ struct ContentView: View {
                         LabeledInfoView(title: "發票載具", value: vm.orderMetadata.carrier)
                     }
                 }
-                Text("Ver: SuPOS_26may17_1_hermes")
+                Text("Ver: SuPOS_26may19_1_hermes")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .padding(.top, 2)
@@ -184,24 +184,36 @@ struct ContentView: View {
 extension ContentView {
     @ViewBuilder
     func ManualOrderingView(size: CGSize) -> some View {
-        if let category = vm.selectedCategory {
-            VStack(spacing: 0) {
-                ItemPagingGrid(category: category, size: CGSize(width: size.width, height: size.height * 0.7))
-                Divider()
-                OptionsBottomPanel(size: CGSize(width: size.width, height: size.height * 0.3))
+        VStack(spacing: 0) {
+            // 🌟 頂部：30% 高度，放置 5x2 分類網格
+            TopCategoryGrid(size: CGSize(width: size.width, height: size.height * 0.30))
+            Divider()
+            
+            // 🌟 中間：50% 高度，放置餐點清單
+            if let category = vm.selectedCategory {
+                ItemPagingGrid(category: category, size: CGSize(width: size.width, height: size.height * 0.50))
+            } else {
+                VStack {
+                    Spacer()
+                    Text("請先由上方選擇餐點分類").font(.title).foregroundColor(.gray)
+                    Spacer()
+                }.frame(width: size.width, height: size.height * 0.50)
             }
-        } else {
-            CategoryPagingGrid(size: size)
+            Divider()
+            
+            // 🌟 底部：20% 高度，放置客製化選項
+            OptionsBottomPanel(size: CGSize(width: size.width, height: size.height * 0.20))
         }
     }
-
+    
     @ViewBuilder
-    func CategoryPagingGrid(size: CGSize) -> some View {
-        let itemsPerPage = 20
-        let spacing: CGFloat = 15 // 🌟 統一設定間距大小
+    func TopCategoryGrid(size: CGSize) -> some View {
+        let itemsPerPage = 10 // 🌟 5欄 x 2列 = 每頁 10 個
         let totalPages = max(1, Int(ceil(Double(vm.categories.count) / Double(itemsPerPage))))
-        // 算出扣除所有間距後的完美正方形大小 (5 個按鍵會有 6 個間距)
-        let squareSize = floor(min((size.width - (spacing * 6)) / 5, (size.height - 140) / 4))
+        
+        // 依據 30% 的新高度精確計算按鈕尺寸，完美填滿不留大白邊
+        let squareWidth = floor((size.width - 90) / 5)
+        let squareHeight = floor((size.height - 50) / 2)
 
         VStack(spacing: 0) {
             GeometryReader { geo in
@@ -209,91 +221,212 @@ extension ContentView {
                     ForEach(0..<totalPages, id: \.self) { pageIdx in
                         let start = pageIdx * itemsPerPage
                         let end = min(start + itemsPerPage, vm.categories.count)
-                        let columns = Array(repeating: GridItem(.fixed(squareSize), spacing: spacing), count: 5)
+                        let columns = Array(repeating: GridItem(.fixed(squareWidth), spacing: 15), count: 5)
                         
-                        VStack(spacing: 0) {
-                            // 🚀 拿掉原本這裡的 Spacer
-                            LazyVGrid(columns: columns, spacing: spacing) {
+                        VStack {
+                            Spacer(minLength: 0)
+                            LazyVGrid(columns: columns, spacing: 12) {
                                 ForEach(vm.categories[start..<end], id: \.self) { cat in
-                                    Button(action: { vm.selectedCategory = cat; vm.itemPage = 0 }) {
-                                        Text(cat).font(.title3).fontWeight(.bold).foregroundColor(.white).frame(width: squareSize, height: squareSize)
-                                            .background(LinearGradient(colors: [.blue.opacity(0.7), .blue], startPoint: .top, endPoint: .bottom))
-                                            .cornerRadius(12).shadow(radius: 3, y: 4)
+                                    Button(action: {
+                                        vm.selectedCategory = cat
+                                        vm.itemPage = 0
+                                        vm.selectedItemForOptions = nil
+                                    }) {
+                                        Text(cat)
+                                            // 調整餐點分類按鍵中的字體大小
+                                            .font(.system(size: 22, weight: .bold))
+                                            .foregroundColor(vm.selectedCategory == cat ? .white : .blue)
+                                            .frame(width: squareWidth, height: squareHeight)
+                                            .background(
+                                                vm.selectedCategory == cat
+                                                ? LinearGradient(colors: [.orange.opacity(0.8), .orange], startPoint: .top, endPoint: .bottom)
+                                                : LinearGradient(colors: [.blue.opacity(0.1), .blue.opacity(0.2)], startPoint: .top, endPoint: .bottom)
+                                            )
+                                            .cornerRadius(12)
+                                            .shadow(radius: vm.selectedCategory == cat ? 3 : 0, y: vm.selectedCategory == cat ? 4 : 0)
                                     }.buttonStyle(JapaneseButtonStyle())
                                 }
                             }
-                            .padding(spacing) // 🌟 讓最外圈的距離 = 按鍵之間的間距
-                            
-                            Spacer(minLength: 0) // 🌟 把剩下的空間留在底部，將網格往上推
-                        }.frame(width: geo.size.width, height: geo.size.height, alignment: .top) // 確保從頂部開始排
+                            .padding(.horizontal, 15)
+                            Spacer(minLength: 0)
+                        }.frame(width: geo.size.width, height: geo.size.height)
                     }
                 }
                 .offset(x: -CGFloat(vm.categoryPage) * geo.size.width)
                 .animation(.easeInOut(duration: 0.25), value: vm.categoryPage)
             }
-            .clipped().contentShape(Rectangle()).gesture(DragGesture().onEnded { v in
+            .clipped()
+            .contentShape(Rectangle())
+            .gesture(DragGesture().onEnded { v in
                 if v.translation.width < -40 && vm.categoryPage < totalPages - 1 { vm.categoryPage += 1 }
                 else if v.translation.width > 40 && vm.categoryPage > 0 { vm.categoryPage -= 1 }
             })
-            PageNavigationButtons(currentPage: $vm.categoryPage, totalPages: totalPages)
+            
+            // 🌟 底部優雅的小圓點分頁提示
+            if totalPages > 1 {
+                HStack(spacing: 8) {
+                    ForEach(0..<totalPages, id: \.self) { index in
+                        Circle()
+                            .fill(vm.categoryPage == index ? Color.blue : Color.gray.opacity(0.3))
+                            .frame(width: 8, height: 8)
+                    }
+                }
+                .padding(.bottom, 8)
+            }
         }
+        .frame(height: size.height)
+        .background(Color(UIColor.systemGray6))
     }
 
-    @ViewBuilder
-    func ItemPagingGrid(category: String, size: CGSize) -> some View {
-        let items = vm.menuItems.filter { $0.category == category }
-        let itemsPerPage = 20
-        let spacing: CGFloat = 15 // 🌟 統一設定間距大小
-        let totalPages = max(1, Int(ceil(Double(items.count) / Double(itemsPerPage))))
-        let squareSize = floor(min((size.width - (spacing * 6)) / 5, (size.height - 140) / 4))
+
+        @ViewBuilder
+    func CategoryPagingGrid(size: CGSize) -> some View {
+        let itemsPerPage = 15
+        let totalPages = max(1, Int(ceil(Double(vm.categories.count) / Double(itemsPerPage))))
+        let squareSize = floor(min((size.width - 90) / 5, (size.height - 140) / 3))
 
         VStack(spacing: 0) {
-            HStack {
-                Button(action: { vm.selectedCategory = nil }) {
-                    HStack { Image(systemName: "chevron.left"); Text("返回分類") }.font(.headline).padding(10).background(Color.gray.opacity(0.15)).cornerRadius(8)
-                }
-                Spacer(); Text(category).font(.title).fontWeight(.bold); Spacer()
-            }.padding(.horizontal).frame(height: 60)
+            Text("請選擇餐點分類")
+                .font(.title)
+                .fontWeight(.bold)
+                .frame(height: 60)
             
             GeometryReader { geo in
                 HStack(spacing: 0) {
                     ForEach(0..<totalPages, id: \.self) { pageIdx in
                         let start = pageIdx * itemsPerPage
-                        let end = min(start + itemsPerPage, items.count)
-                        let columns = Array(repeating: GridItem(.fixed(squareSize), spacing: spacing), count: 5)
+                        let end = min(start + itemsPerPage, vm.categories.count)
+                        let columns = Array(repeating: GridItem(.fixed(squareSize), spacing: 15), count: 5)
                         
-                        VStack(spacing: 0) {
-                            // 🚀 拿掉原本這裡的 Spacer
-                            LazyVGrid(columns: columns, spacing: spacing) {
+                        VStack {
+                            Spacer(minLength: 0)
+                            LazyVGrid(columns: columns, spacing: 15) {
+                                ForEach(vm.categories[start..<end], id: \.self) { cat in
+                                    Button(action: { vm.selectedCategory = cat; vm.itemPage = 0 }) {
+                                        Text(cat)
+                                            .font(.title3)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.white)
+                                            .frame(width: squareSize, height: squareSize)
+                                            .background(LinearGradient(colors: [.blue.opacity(0.7), .blue], startPoint: .top, endPoint: .bottom))
+                                            .cornerRadius(12)
+                                            .shadow(radius: 3, y: 4)
+                                    }.buttonStyle(JapaneseButtonStyle())
+                                }
+                            }
+                            .padding(.horizontal, 15)
+                            Spacer(minLength: 0)
+                        }.frame(width: geo.size.width, height: geo.size.height)
+                    }
+                }
+                .offset(x: -CGFloat(vm.categoryPage) * geo.size.width)
+                .animation(.easeInOut(duration: 0.25), value: vm.categoryPage)
+            }
+            .clipped()
+            .contentShape(Rectangle())
+            .gesture(DragGesture().onEnded { v in
+                if v.translation.width < -40 && vm.categoryPage < totalPages - 1 { vm.categoryPage += 1 }
+                else if v.translation.width > 40 && vm.categoryPage > 0 { vm.categoryPage -= 1 }
+            })
+            
+            if totalPages > 1 {
+                HStack(spacing: 10) {
+                    ForEach(0..<totalPages, id: \.self) { index in
+                        Circle()
+                            .fill(vm.categoryPage == index ? Color.blue : Color.gray.opacity(0.3))
+                            .frame(width: 12, height: 12)
+                            .animation(.easeInOut(duration: 0.2), value: vm.categoryPage)
+                    }
+                }
+                .padding(.top, 15)
+                .padding(.bottom, 25)
+            }
+            // PageNavigationButtons(currentPage: $vm.categoryPage, totalPages: totalPages)
+        }
+    }
+
+    @ViewBuilder
+    // 手動點餐的中間層按鍵佈局
+    func ItemPagingGrid(category: String, size: CGSize) -> some View {
+        let items = vm.menuItems.filter { $0.category == category }
+        let itemsPerPage = 15 // 🌟 改為 5欄 x 2列 = 每頁 10 個
+        let totalPages = max(1, Int(ceil(Double(items.count) / Double(itemsPerPage))))
+        
+        // 精確計算餐點按鈕尺寸，完美填滿中間的 50% 高度
+        let squareWidth = floor((size.width - 90) / 5)      // 按鍵寬度
+        // let squareHeight = floor((size.height - 50) / 2)    // 按鍵高度
+        let squareHeight: CGFloat = 70 // 🌟 直接鎖死高度在110
+
+        
+
+        VStack(spacing: 0) {
+            // 🚫 原本這裡的「返回分類」和「分類名稱」HStack 已經被徹底移除，釋放空間！
+
+            GeometryReader { geo in
+                HStack(spacing: 0) {
+                    ForEach(0..<totalPages, id: \.self) { pageIdx in
+                        let start = pageIdx * itemsPerPage
+                        let end = min(start + itemsPerPage, items.count)
+                        let columns = Array(repeating: GridItem(.fixed(squareWidth), spacing: 15), count: 5)
+                        
+                        VStack {
+                            Spacer(minLength: 0)
+                            LazyVGrid(columns: columns, spacing: 15) {
                                 ForEach(items[start..<end]) { item in
                                     Button(action: { vm.handleItemTap(item: item) }) {
-                                        VStack {
-                                            Text(item.name).font(.system(size: 16, weight: .bold)).foregroundColor(.primary).multilineTextAlignment(.center)
-                                            Text("$\(item.price)").font(.headline).foregroundColor(.gray)
+                                        VStack(spacing: 8) {
+                                            Text(item.name)
+                                                .font(.system(size: 18, weight: .bold))
+                                                .foregroundColor(.primary)
+                                                .multilineTextAlignment(.center)
+                                            // Text("$\(item.price)") 在單品的按鍵上顯示金額
+                                                .lineLimit(2) //允許文字最多折成2行
+                                                .minimumScaleFactor(0.8) // 如果品項名稱太長，字體會自動的稍微縮小一些以求完整顯示
+                                                .padding(.horizontal, 4) // 左右留一點空間，不要貼齊邊緣
                                         }
-                                        .frame(width: squareSize, height: squareSize).background(Color(UIColor.systemBackground)).cornerRadius(12).shadow(radius: 2, y: 2)
+                                        .frame(width: squareWidth, height: squareHeight)
+                                        .background(Color(UIColor.systemBackground))
+                                        .cornerRadius(12)
+                                        .shadow(radius: 2, y: 2)
+                                        // 如果被選中，加上藍色外框
                                         .overlay(RoundedRectangle(cornerRadius: 12).stroke(vm.selectedItemForOptions?.id == item.id ? Color.blue : Color.clear, lineWidth: 3))
                                     }.buttonStyle(JapaneseButtonStyle())
                                 }
                             }
-                            .padding(spacing) // 🌟 讓最外圈的距離 = 按鍵之間的間距
-                            
-                            Spacer(minLength: 0) // 🌟 把剩下的空間留在底部
-                        }.frame(width: geo.size.width, height: geo.size.height, alignment: .top) // 確保從頂部開始排
+                            .padding(.horizontal, 15)
+                            Spacer(minLength: 0)
+                        }.frame(width: geo.size.width, height: geo.size.height)
                     }
                 }
                 .offset(x: -CGFloat(vm.itemPage) * geo.size.width)
                 .animation(.easeInOut(duration: 0.25), value: vm.itemPage)
             }
-            .clipped().contentShape(Rectangle()).gesture(DragGesture().onEnded { v in
+            .clipped()
+            .contentShape(Rectangle())
+            .gesture(DragGesture().onEnded { v in
+                // 處理左右滑動翻頁
                 if v.translation.width < -40 && vm.itemPage < totalPages - 1 { vm.itemPage += 1 }
                 else if v.translation.width > 40 && vm.itemPage > 0 { vm.itemPage -= 1 }
             })
-            PageNavigationButtons(currentPage: $vm.itemPage, totalPages: totalPages)
+            
+            // 🌟 加入 iOS 原生質感的小圓點分頁提示
+            if totalPages > 1 {
+                HStack(spacing: 8) {
+                    ForEach(0..<totalPages, id: \.self) { index in
+                        Circle()
+                            .fill(vm.itemPage == index ? Color.blue : Color.gray.opacity(0.3))
+                            .frame(width: 8, height: 8)
+                    }
+                }
+                .padding(.top, 5)
+                .padding(.bottom, 10)
+            }
         }
     }
 
+
     @ViewBuilder
+    // 手動點餐的底部空間佈局
     func OptionsBottomPanel(size: CGSize) -> some View {
         VStack(spacing: 0) {
             if let item = vm.selectedItemForOptions, let groups = item.optionsGroup?.components(separatedBy: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
@@ -313,7 +446,9 @@ extension ContentView {
             } else {
                 Text("等待選擇餐點...").foregroundColor(.gray).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }.background(Color(UIColor.systemGray6))
+        }
+        .frame(height: size.height) // 強制鎖定成外面傳進來的 20% 高度
+        .background(Color(UIColor.systemGray6))
     }
 
     @ViewBuilder
