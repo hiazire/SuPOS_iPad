@@ -33,6 +33,7 @@ class POSViewModel: ObservableObject {
     @Published var selectedCategory: String? = nil
     @Published var selectedItemForOptions: MenuItem? = nil
     @Published var selectedCartItemID: UUID? = nil
+    @Published var selectedOptionName: String? = nil
     @Published var currentPOSViewMode: POSViewMode = .manualOrdering
     
     @Published var categoryPage: Int = 0
@@ -246,26 +247,59 @@ class POSViewModel: ObservableObject {
 
     func adjustQuantity(ofSelected adjustment: Int) {
         guard let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) else { return }
-        cart[idx].quantity += adjustment
-        if cart[idx].quantity < 1 {
-            cart.remove(at: idx)
-            if let lastItem = cart.last {
-                selectedCartItemID = lastItem.id
-                selectedItemForOptions = lastItem.menuItem
-            } else {
-                selectedCartItemID = nil; selectedItemForOptions = nil
+
+        // 🌟 如果目前有選中某個客製化加料
+        if let optName = selectedOptionName {
+            if adjustment > 0 {
+                let currentCount = cart[idx].selectedOptions.filter { $0.name == optName }.count
+                if currentCount < 99 { // 🌟 限制最大加料數量為 99
+                    if let optToDuplicate = cart[idx].selectedOptions.first(where: { $0.name == optName }) {
+                        cart[idx].selectedOptions.append(optToDuplicate)
+                    }
+                }
+            } else if adjustment < 0 {
+                // 減少一份該加料
+                if let removeIdx = cart[idx].selectedOptions.lastIndex(where: { $0.name == optName }) {
+                    cart[idx].selectedOptions.remove(at: removeIdx)
+                }
+                // 如果扣到沒了，取消選取狀態
+                if !cart[idx].selectedOptions.contains(where: { $0.name == optName }) {
+                    selectedOptionName = nil
+                }
+            }
+        } else {
+            // 🌟 否則，照常調整主餐數量
+            cart[idx].quantity += adjustment
+            if cart[idx].quantity < 1 {
+                cart.remove(at: idx)
+                if let lastItem = cart.last {
+                    selectedCartItemID = lastItem.id
+                    selectedItemForOptions = lastItem.menuItem
+                    selectedOptionName = nil
+                } else {
+                    selectedCartItemID = nil; selectedItemForOptions = nil; selectedOptionName = nil
+                }
             }
         }
     }
 
     func deleteSelectedCartItem() {
+        // 🌟 如果有選中加料，則把該項加料「全部刪除」
+        if let optName = selectedOptionName, let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) {
+            cart[idx].selectedOptions.removeAll(where: { $0.name == optName })
+            selectedOptionName = nil
+            return
+        }
+        
+        // 原本刪除主餐的邏輯
         if let id = selectedCartItemID {
             cart.removeAll { $0.id == id }
             if let lastItem = cart.last {
                 selectedCartItemID = lastItem.id
                 selectedItemForOptions = lastItem.menuItem
+                selectedOptionName = nil
             } else {
-                selectedCartItemID = nil; selectedItemForOptions = nil
+                selectedCartItemID = nil; selectedItemForOptions = nil; selectedOptionName = nil
             }
         }
     }
@@ -301,6 +335,7 @@ class POSViewModel: ObservableObject {
         let newItem = CartItem(menuItem: item, quantity: 1, selectedOptions: [])
         cart.append(newItem)
         selectedCartItemID = newItem.id; selectedItemForOptions = item
+        selectedOptionName = nil // 🌟 選擇新餐點時，清空加料選擇
     }
 
     func addOptionToCart(option: OptionItem) {
@@ -314,11 +349,19 @@ class POSViewModel: ObservableObject {
         guard let url = URL(string: API_URL) else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
+            
+            // If you see "Fetch error"，就把Google傳來的東西變成字串印出來！
+            print("🚨 攔截到的原始資料：\n\(String(data: data, encoding: .utf8) ?? "無法轉換字串")")
+            
             let res = try JSONDecoder().decode(MenuResponse.self, from: data)
             self.menuItems = res.menu; self.allOptions = res.options ?? []
             self.categories = Array(Set(res.menu.map { $0.category })).sorted()
             self.isLoading = false
-        } catch { self.isLoading = false }
+        } catch {
+            self.isLoading = false
+            // 🌟 加上這行，讓 Xcode 吐出具體的死因
+            print("❌ 菜單解碼失敗: \(error)")
+        }
     }
     
     func updateWebOrderState(orderId: String, newState: String) {

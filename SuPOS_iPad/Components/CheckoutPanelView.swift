@@ -129,7 +129,7 @@ struct CheckoutPanelView: View {
                     if vm.isLoading {
                         ProgressView().tint(.white).padding(.trailing, 10)
                     }
-                    Text(vm.isLoading ? "正在送單..." : "確認結帳 ($\(vm.cartTotal))")
+                    Text(vm.isLoading ? "正在送單..." : "確認結帳")
                 }
                 .font(.title2)
                 .fontWeight(.bold)
@@ -188,8 +188,10 @@ struct CheckoutPanelView: View {
                             .font(.subheadline)
                             .foregroundColor(.red)
                     }
-                    ForEach(item.selectedOptions, id: \.self) { opt in
-                        Text("・\(opt.name)")
+                    let groupedOptions = Dictionary(grouping: item.selectedOptions, by: { $0.name })
+                    ForEach(groupedOptions.keys.sorted(), id: \.self) { optName in
+                        let optCount = groupedOptions[optName]?.count ?? 0
+                        Text("・\(optName)\(optCount > 1 ? " x\(optCount)" : "")")
                             .font(.caption)
                             .foregroundColor(.gray)
                     }

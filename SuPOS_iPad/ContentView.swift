@@ -185,24 +185,18 @@ extension ContentView {
     @ViewBuilder
     func ManualOrderingView(size: CGSize) -> some View {
         VStack(spacing: 0) {
-            // 🌟 頂部：30% 高度，放置 5x2 分類網格
             TopCategoryGrid(size: CGSize(width: size.width, height: size.height * 0.30))
             Divider()
-            
-            // 🌟 中間：50% 高度，放置餐點清單
             if let category = vm.selectedCategory {
-                ItemPagingGrid(category: category, size: CGSize(width: size.width, height: size.height * 0.50))
+                ItemPagingGrid(category: category, size: CGSize(width: size.width, height: size.height * 0.35))
             } else {
-                VStack {
-                    Spacer()
-                    Text("請先由上方選擇餐點分類").font(.title).foregroundColor(.gray)
-                    Spacer()
-                }.frame(width: size.width, height: size.height * 0.50)
+                VStack { Spacer(); Text("請先選擇分類").foregroundColor(.gray); Spacer() }
+                    .frame(width: size.width, height: size.height * 0.35)
             }
             Divider()
-            
-            // 🌟 底部：20% 高度，放置客製化選項
-            OptionsBottomPanel(size: CGSize(width: size.width, height: size.height * 0.20))
+            PageNavigationControl(size: CGSize(width: size.width, height: size.height * 0.10))
+            Divider()
+            OptionsBottomPanel(size: CGSize(width: size.width, height: size.height * 0.25))
         }
     }
     
@@ -370,7 +364,6 @@ extension ContentView {
                         let columns = Array(repeating: GridItem(.fixed(squareWidth), spacing: 15), count: 5)
                         
                         VStack {
-                            Spacer(minLength: 0)
                             LazyVGrid(columns: columns, spacing: 15) {
                                 ForEach(items[start..<end]) { item in
                                     Button(action: { vm.handleItemTap(item: item) }) {
@@ -394,6 +387,7 @@ extension ContentView {
                                 }
                             }
                             .padding(.horizontal, 15)
+                            .padding(.top, 15)
                             Spacer(minLength: 0)
                         }.frame(width: geo.size.width, height: geo.size.height)
                     }
@@ -426,31 +420,144 @@ extension ContentView {
 
 
     @ViewBuilder
-    // 手動點餐的底部空間佈局
     func OptionsBottomPanel(size: CGSize) -> some View {
-        VStack(spacing: 0) {
-            if let item = vm.selectedItemForOptions, let groups = item.optionsGroup?.components(separatedBy: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
-                Text("\(item.name) - 客製化選項").font(.headline).padding(.top, 10)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 15) {
-                        ForEach(vm.allOptions.filter { groups.contains($0.group) }) { opt in
-                            Button(action: { vm.addOptionToCart(option: opt) }) {
+        if let item = vm.selectedItemForOptions,
+           let cartId = vm.selectedCartItemID,
+           let cartIndex = vm.cart.firstIndex(where: { $0.id == cartId }) {
+            
+            let availableGroups = item.optionsGroup?.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) } ?? []
+            let allMatchedOptions = vm.allOptions.filter { availableGroups.contains($0.group) }
+            let singleOptions = allMatchedOptions.filter { ($0.optionType ?? "").lowercased() == "single" }
+            let multiOptions = allMatchedOptions.filter { ($0.optionType ?? "").lowercased() == "multi" }
+            
+            // 🌟 核心魔法：將陣列切割成 3x2 (每頁 6 個) 與 2x2 (每頁 4 個)
+            let singleChunks = stride(from: 0, to: singleOptions.count, by: 6).map { Array(singleOptions[$0..<min($0 + 6, singleOptions.count)]) }
+            let multiChunks = stride(from: 0, to: multiOptions.count, by: 4).map { Array(multiOptions[$0..<min($0 + 4, multiOptions.count)]) }
+            
+            HStack(spacing: 0) {
+                // 🌟 左側 60%：單選替換區 (3 欄 x 2 列)
+                VStack(spacing: 0) {
+                    Text("單選替換區").font(.caption).fontWeight(.bold).foregroundColor(.orange).padding(.top, 5)
+                    if singleChunks.isEmpty { Spacer() } else {
+                        TabView {
+                            ForEach(0..<singleChunks.count, id: \.self) { pageIdx in
                                 VStack {
-                                    Text(opt.name).font(.headline).fontWeight(.bold)
-                                    Text(opt.price > 0 ? "+\(opt.price)元" : "免費").font(.subheadline)
-                                }.frame(minWidth: 110, minHeight: 65).background(Color.orange.opacity(0.15)).foregroundColor(.orange).cornerRadius(10)
-                            }.buttonStyle(JapaneseButtonStyle())
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                                        ForEach(singleChunks[pageIdx]) { opt in
+                                            let isSelected = vm.cart[cartIndex].selectedOptions.contains(where: { $0.id == opt.id })
+                                            Button(action: {
+                                                vm.cart[cartIndex].selectedOptions.removeAll(where: { $0.group == opt.group })
+                                                if !isSelected { vm.cart[cartIndex].selectedOptions.append(opt) }
+                                            }) { OptionButtonUI(opt: opt, isSelected: isSelected) }
+                                        }
+                                    }
+                                    Spacer()
+                                }.padding(10)
+                            }
                         }
-                    }.padding(.horizontal, 20).padding(.vertical, 10)
-                }
-            } else {
-                Text("等待選擇餐點...").foregroundColor(.gray).frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+                        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+                    }
+                }.frame(width: size.width * 0.6).background(Color.orange.opacity(0.05))
+                
+                Divider()
+                
+                // 🌟 右側 40%：加料複選區 (2 欄 x 2 列)
+                VStack(spacing: 0) {
+                    Text("加料複選區").font(.caption).fontWeight(.bold).foregroundColor(.blue).padding(.top, 5)
+                    if multiChunks.isEmpty { Spacer() } else {
+                        TabView {
+                            ForEach(0..<multiChunks.count, id: \.self) { pageIdx in
+                                VStack {
+                                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
+                                        ForEach(multiChunks[pageIdx]) { opt in
+                                            let isSelected = vm.cart[cartIndex].selectedOptions.contains(where: { $0.id == opt.id })
+                                            Button(action: {
+                                                // 🌟 直接新增，不再作切換。點幾下就加幾份！
+                                                vm.cart[cartIndex].selectedOptions.append(opt)
+                                                vm.selectedOptionName = opt.name // 🌟 自動選中它，方便客人反悔時直接按左側的 ➖
+                                            }) { OptionButtonUI(opt: opt, isSelected: isSelected) }
+                                        }
+                                    }
+                                    Spacer()
+                                }.padding(10)
+                            }
+                        }
+                        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+                    }
+                }.frame(width: size.width * 0.4).background(Color.blue.opacity(0.05))
+            }.frame(width: size.width, height: size.height).background(Color(UIColor.systemGray6))
+        } else {
+            Text("等待選擇餐點...").foregroundColor(.gray).frame(maxWidth: .infinity, maxHeight: .infinity).frame(height: size.height).background(Color(UIColor.systemGray6))
         }
-        .frame(height: size.height) // 強制鎖定成外面傳進來的 20% 高度
-        .background(Color(UIColor.systemGray6))
     }
-
+    
+    @ViewBuilder
+    func OptionButtonUI(opt: OptionItem, isSelected: Bool) -> some View {
+        VStack(spacing: 4) {
+            Text(opt.name)
+                .font(.system(size: 15, weight: .bold))
+                .multilineTextAlignment(.center)
+            
+            Text(opt.price > 0 ? "+\(opt.price)元" : (opt.price < 0 ? "\(opt.price)元" : "免費"))
+                .font(.system(size: 13))
+        }
+        .frame(height: 55)
+        .frame(maxWidth: .infinity)
+        .background(isSelected ? Color.blue : Color(UIColor.systemBackground))
+        .foregroundColor(isSelected ? .white : .primary)
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(isSelected ? Color.blue : Color.gray.opacity(0.3), lineWidth: isSelected ? 0 : 1)
+        )
+        .shadow(color: Color.black.opacity(0.05), radius: 2, y: 2)
+    }
+    
+    @ViewBuilder
+    func PageNavigationControl(size: CGSize) -> some View {
+        let items = vm.menuItems.filter { $0.category == vm.selectedCategory ?? "" }
+        let itemsPerPage = 15
+        let totalPages = max(1, Int(ceil(Double(items.count) / Double(itemsPerPage))))
+        
+        HStack {
+            // 左側翻頁按鈕
+            Button(action: { if vm.itemPage > 0 { vm.itemPage -= 1 } }) {
+                Image(systemName: "chevron.left.2")
+                    .font(.title).fontWeight(.bold)
+                    .frame(width: 100, height: size.height * 0.8)
+                    .background(vm.itemPage > 0 ? Color.gray.opacity(0.2) : Color.clear)
+                    .foregroundColor(vm.itemPage > 0 ? .primary : .gray.opacity(0.3))
+                    .cornerRadius(10)
+            }
+            .disabled(vm.itemPage <= 0)
+            
+            Spacer()
+            
+            // 中間分頁資訊
+            if vm.selectedCategory != nil {
+                Text("第 \(vm.itemPage + 1) 頁 / 共 \(totalPages) 頁")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            // 右側翻頁按鈕
+            Button(action: { if vm.itemPage < totalPages - 1 { vm.itemPage += 1 } }) {
+                Image(systemName: "chevron.right.2")
+                    .font(.title).fontWeight(.bold)
+                    .frame(width: 100, height: size.height * 0.8)
+                    .background(vm.itemPage < totalPages - 1 ? Color.gray.opacity(0.2) : Color.clear)
+                    .foregroundColor(vm.itemPage < totalPages - 1 ? .primary : .gray.opacity(0.3))
+                    .cornerRadius(10)
+            }
+            .disabled(vm.itemPage >= totalPages - 1)
+        }
+        .padding(.horizontal, 20)
+        .frame(width: size.width, height: size.height)
+        .background(Color(UIColor.systemBackground))
+    }
+    
     @ViewBuilder
     func TransactionHistoryPanelView(size: CGSize) -> some View {
         VStack(spacing: 0) {
@@ -532,6 +639,7 @@ extension ContentView {
                     Button(action: {
                         vm.selectedCartItemID = item.id
                         vm.selectedItemForOptions = item.menuItem
+                        vm.selectedOptionName = nil
                     }) {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
@@ -548,13 +656,64 @@ extension ContentView {
                                     }
                                 }
 
-                                ForEach(Dictionary(grouping: item.selectedOptions, by: { $0.name }).map { $0.key }, id: \.self) { optName in
-                                    Text("・\(optName)")
-                                        .font(.subheadline)
-                                        .foregroundColor(.orange)
+                                let groupedOptions = Dictionary(grouping: item.selectedOptions, by: { $0.name })
+                                ForEach(groupedOptions.keys.sorted(), id: \.self) { optName in
+                                    let opts = groupedOptions[optName] ?? []
+                                    let optCount = opts.count
+                                    let isSingle = (opts.first?.optionType ?? "").lowercased() == "single"
+
+                                    if isSingle {
+                                        // 🌟 單選替換區：淡橘色背景，滿版寬度，不可獨立調整數量 (點擊時清空 selectedOptionName)
+                                        Button(action: {
+                                            vm.selectedCartItemID = item.id
+                                            vm.selectedItemForOptions = item.menuItem
+                                            vm.selectedOptionName = nil // 確保不會進入加料調整模式
+                                        }) {
+                                            HStack {
+                                                Text("・\(optName)")
+                                                    .font(.subheadline)
+                                                    .foregroundColor(.orange)
+                                                Spacer()
+                                            }
+                                            .padding(.horizontal, 8).padding(.vertical, 6)
+                                            .frame(maxWidth: .infinity, alignment: .leading) // 🌟 和購物車同寬
+                                            .background(Color.orange.opacity(0.1))
+                                            .cornerRadius(6)
+                                        }
+                                    } else {
+                                        // 🌟 加料複選區：淡藍色背景，滿版寬度，可點擊進入調整模式
+                                        let isSelectedOption = (vm.selectedCartItemID == item.id && vm.selectedOptionName == optName)
+                                        Button(action: {
+                                            vm.selectedCartItemID = item.id
+                                            vm.selectedItemForOptions = item.menuItem
+                                            vm.selectedOptionName = optName // 選中此加料，允許 +/- 調整
+                                        }) {
+                                            HStack {
+                                                Text("・\(optName)\(optCount > 1 ? " x\(optCount)" : "")")
+                                                    .font(.subheadline).fontWeight(.bold)
+                                                    .foregroundColor(isSelectedOption ? .white : .blue)
+                                                Spacer()
+                                            }
+                                            .padding(.horizontal, 8).padding(.vertical, 6)
+                                            .frame(maxWidth: .infinity, alignment: .leading) // 🌟 和購物車同寬
+                                            .background(isSelectedOption ? Color.blue : Color.blue.opacity(0.1))
+                                            .cornerRadius(6)
+                                        }
+                                    }
                                 }
                             }
                             Spacer()
+                            
+                            // 🌟 新增的數量顯示區塊 🌟
+                            // 注意：你的變數名稱是 item.quantity，不是 qty 喔！
+                            if item.quantity > 1 {
+                                Text("x\(item.quantity)")
+                                    .font(.title3) // 字體稍微放大一點
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.blue)
+                                    .padding(.trailing, 8) // 和右邊的金額稍微拉開呼吸空間
+                            }
+                            
                             Text("$\(item.isComplimentary ? 0 : total)")
                                 .fontWeight(.bold)
                                 .foregroundColor(item.isComplimentary ? .red : .primary)

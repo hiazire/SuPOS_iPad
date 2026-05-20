@@ -29,6 +29,15 @@ struct MenuItem: Identifiable, Codable, Hashable {
     }
 }
 
+// 2026may20
+struct Option: Identifiable, Codable, Hashable {
+    let id: String
+    let name: String
+    let price: Int
+    let group: String      // 🌟 對應sheet A 欄：group
+    let optionType: String // 🌟 對應sheet E 欄：optionType
+}
+
 struct WebOrder: Identifiable, Codable, Hashable {
     var id: String { orderId }
     let orderId: String
@@ -96,6 +105,7 @@ struct OptionItem: Identifiable, Codable, Hashable {
     let group: String
     let name: String
     let price: Int
+    let optionType: String
 }
 
 struct CartItem: Identifiable, Hashable {
