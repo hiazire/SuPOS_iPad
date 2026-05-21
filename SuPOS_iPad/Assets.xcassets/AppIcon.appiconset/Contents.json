@@ -1,6 +1,7 @@
 {
   "images" : [
     {
+      "filename" : "app_icon_bao.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -23,7 +24,6 @@
           "value" : "tinted"
         }
       ],
-      "filename" : "app_icon_bao.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
