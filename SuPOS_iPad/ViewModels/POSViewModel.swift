@@ -16,8 +16,12 @@ class POSViewModel: ObservableObject {
     // ================= 狀態變數 (@Published) =================
     @Published var webOrders: [WebOrder] = []
     @Published var selectedDateFilter: OrderDateFilter = .today
+    @Published var customStartDate: Date = Date()
+    @Published var customEndDate: Date = Date()
     @Published var incomingOrder: WebOrder? = nil
     @Published var showingOrderPopup: Bool = false
+    @Published var showingCustomDateDialog: Bool = false
+    @Published var showingCancelOrderConfirmDialog: Bool = false
     @Published var selectedWebOrder: WebOrder? = nil
     @Published var activeWebOrderId: String = ""
     @Published var webOrderPage: Int = 0
@@ -35,6 +39,7 @@ class POSViewModel: ObservableObject {
     @Published var selectedCartItemID: UUID? = nil
     @Published var selectedOptionName: String? = nil
     @Published var currentPOSViewMode: POSViewMode = .manualOrdering
+    @Published var selectedTable: String = "外帶"
     
     @Published var categoryPage: Int = 0
     @Published var itemPage: Int = 0
@@ -88,12 +93,11 @@ class POSViewModel: ObservableObject {
             
             // FuncButton(title: "手動點餐", icon: "hand.tap", action: { self.currentPOSViewMode = .manualOrdering }),
             FuncButton(title: "手動點餐", icon: "square.grid.3x3.fill", action: { self.currentPOSViewMode = .manualOrdering; self.selectedItemForOptions = nil }),
-            
             FuncButton(title: "歷史訂單", icon: "clock.arrow.circlepath", action: { self.currentPOSViewMode = .transactionHistory }),
-            // 「日營業額」的按鈕資料
+            FuncButton(title: orderMetadata.transactionType, icon: "bag", action: { self.toggleTransactionType() }),
+            FuncButton(title: "桌號", icon: "rectangle.grid.2x2.fill", action: { self.currentPOSViewMode = .tableSelection }),
             FuncButton(title: "日營業額", icon: "chart.bar.doc.horizontal", action: {
                 self.currentPOSViewMode = .dailyTurnover}),
-            FuncButton(title: orderMetadata.transactionType, icon: "bag", action: { self.toggleTransactionType() }),
             FuncButton(title: "刪除商品", icon: "trash", action: { self.deleteSelectedCartItem() }),
             FuncButton(title: "取消交易", icon: "xmark.circle", action: { self.cancelEntireTransaction() }),
             FuncButton(title: "清除加料", icon: "minus.square", action: { self.clearOptionsOfSelected() }),
@@ -115,9 +119,25 @@ class POSViewModel: ObservableObject {
             switch selectedDateFilter {
             case .today: return dayDiff == 0
             case .yesterday: return dayDiff == 1
-            case .threeDays: return dayDiff >= 0 && dayDiff <= 2
-            case .fiveDays: return dayDiff >= 0 && dayDiff <= 4
+            case .custom:
+                let orderStart = calendar.startOfDay(for: orderDate)
+                let filterStart = calendar.startOfDay(for: customStartDate)
+                let filterEnd = calendar.startOfDay(for: customEndDate)
+                return orderStart >= filterStart && orderStart <= filterEnd
             }
+        }
+    }
+
+    var todaysWebOrders: [WebOrder] {
+        let calendar = Calendar.current
+        return webOrders.filter { order in
+            guard order.state == "PENDING" || order.state == "READY" || order.state == "CANCELED" else { return false }
+            guard let orderDate = parseOrderDate(order.timestamp) else { return false }
+            return calendar.isDateInToday(orderDate)
+        }.sorted {
+            let d1 = parseOrderDate($0.timestamp) ?? Date.distantPast
+            let d2 = parseOrderDate($1.timestamp) ?? Date.distantPast
+            return d1 > d2
         }
     }
 
@@ -162,6 +182,11 @@ class POSViewModel: ObservableObject {
                let success = response["success"] as? Bool, success {
                 SoundManager.shared.playSuccess()
                 HapticManager.shared.triggerSuccess()
+                
+                if !activeWebOrderId.isEmpty {
+                    updateWebOrderState(orderId: activeWebOrderId, newState: "READY")
+                }
+                
                 cancelEntireTransaction()
                 currentPOSViewMode = .manualOrdering
             } else {
@@ -190,10 +215,16 @@ class POSViewModel: ObservableObject {
                     if webOrders[idx].state == "PENDING" { webOrders[idx] = order }
                 } else { webOrders.append(order) }
             }
-            if let new = res.orders.first(where: { $0.state == "PENDING" }), !showingOrderPopup {
+            if let new = res.orders.first(where: { 
+                $0.state == "PENDING" &&
+                $0.orderId != selectedWebOrder?.orderId &&
+                $0.orderId != activeWebOrderId
+            }), !showingOrderPopup {
                 SoundManager.shared.playSuccess()
-                incomingOrder = new
-                showingOrderPopup = true
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    incomingOrder = new
+                    showingOrderPopup = true
+                }
             }
         } catch { print("Fetch error: \(error)") }
     }
@@ -203,7 +234,20 @@ class POSViewModel: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("text/plain;charset=utf-8", forHTTPHeaderField: "Content-Type")
-        let days: Int = (selectedDateFilter == .today) ? 0 : (selectedDateFilter == .yesterday ? 1 : (selectedDateFilter == .threeDays ? 3 : 5))
+        
+        let days: Int
+        switch selectedDateFilter {
+        case .today:
+            days = 0
+        case .yesterday:
+            days = 1
+        case .custom:
+            let calendar = Calendar.current
+            let startOfToday = calendar.startOfDay(for: Date())
+            let startOfCustom = calendar.startOfDay(for: customStartDate)
+            days = max(0, calendar.dateComponents([.day], from: startOfCustom, to: startOfToday).day ?? 30)
+        }
+        
         let payload: [String: Any] = ["action": "getHistoryOrders", "days": days]
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         
@@ -243,6 +287,8 @@ class POSViewModel: ObservableObject {
 
     func cancelEntireTransaction() {
         cart = []; orderMetadata = OrderMetadata(); selectedCartItemID = nil; selectedItemForOptions = nil
+        activeWebOrderId = ""
+        selectedWebOrder = nil
     }
 
     func adjustQuantity(ofSelected adjustment: Int) {
@@ -345,27 +391,70 @@ class POSViewModel: ObservableObject {
         }
     }
     
+    @Published var menuFetchError: String? = nil
+
     func fetchMenuData() async {
-        guard let url = URL(string: API_URL) else { return }
+        print("🔵 [fetchMenuData] 開始呼叫，URL: \(API_URL)")
+        guard let url = URL(string: API_URL) else {
+            print("❌ [fetchMenuData] URL 無效")
+            return
+        }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            
-            // If you see "Fetch error"，就把Google傳來的東西變成字串印出來！
-            print("🚨 攔截到的原始資料：\n\(String(data: data, encoding: .utf8) ?? "無法轉換字串")")
-            
+            print("🔵 [fetchMenuData] 送出 URLSession 請求...")
+            let (data, response) = try await URLSession.shared.data(from: url)
+            let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let rawString = String(data: data, encoding: .utf8) ?? ""
+            print("🔵 [fetchMenuData] 收到回應，HTTP \(httpStatus)，資料長度: \(data.count) bytes")
+
+            // 如果回傳內容開頭是 <，代表 GAS 回傳了 HTML（錯誤頁/重定向），不是 JSON
+            if rawString.trimmingCharacters(in: .whitespaces).hasPrefix("<") {
+                let preview = String(rawString.prefix(500))
+                print("❌ [fetchMenuData] GAS 回傳 HTML (HTTP \(httpStatus))，前 500 字：\n\(preview)")
+                await MainActor.run {
+                    self.menuFetchError = "GAS 端回傳 HTML（HTTP \(httpStatus)），請檢查 GAS 部署或 quota。"
+                    self.isLoading = false
+                }
+                return
+            }
+
+            print("🔵 [fetchMenuData] 原始 JSON 前 200 字：\(String(rawString.prefix(200)))")
             let res = try JSONDecoder().decode(MenuResponse.self, from: data)
-            self.menuItems = res.menu; self.allOptions = res.options ?? []
-            self.categories = Array(Set(res.menu.map { $0.category })).sorted()
+            
+            // 🌟 容錯過濾：排除分類或品名為空的無效商品（通常是由 Google Sheet 的空白行產生的）
+            let validMenu = res.menu.filter { 
+                !$0.category.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && 
+                !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty 
+            }
+            
+            self.menuItems = validMenu
+            self.allOptions = res.options ?? []
+            self.categories = Array(Set(validMenu.map { $0.category })).sorted()
+            
+            // 🌟 自動預設選取第一個有效分類（如果尚未選擇），提升使用者體驗
+            if self.selectedCategory == nil || !self.categories.contains(self.selectedCategory ?? "") {
+                self.selectedCategory = self.categories.first
+            }
+            
+            self.menuFetchError = nil
             self.isLoading = false
+            print("✅ [fetchMenuData] 成功載入 \(validMenu.count) 項有效菜單（已過濾 \(res.menu.count - validMenu.count) 項無效空白列）")
+        } catch let urlError as URLError {
+            self.isLoading = false
+            print("❌ [fetchMenuData] 網路錯誤 URLError code=\(urlError.code.rawValue)：\(urlError.localizedDescription)")
+            self.menuFetchError = "網路錯誤(\(urlError.code.rawValue))：\(urlError.localizedDescription)"
         } catch {
             self.isLoading = false
-            // 🌟 加上這行，讓 Xcode 吐出具體的死因
-            print("❌ 菜單解碼失敗: \(error)")
+            print("❌ [fetchMenuData] 解碼失敗: \(error)")
+            self.menuFetchError = "資料解析失敗：\(error.localizedDescription)"
         }
     }
     
     func updateWebOrderState(orderId: String, newState: String) {
-        showingOrderPopup = false; incomingOrder = nil; selectedWebOrder = nil
+        withAnimation(.easeInOut(duration: 0.3)) {
+            showingOrderPopup = false
+            incomingOrder = nil
+            selectedWebOrder = nil
+        }
         if let idx = webOrders.firstIndex(where: { $0.orderId == orderId }) { webOrders[idx].state = newState }
         Task {
             guard let url = URL(string: API_URL) else { return }

@@ -109,7 +109,13 @@ struct CheckoutPanelView: View {
         let isCartEmpty = vm.cart.isEmpty
 
         HStack(spacing: 20) {
-            Button(action: { vm.currentPOSViewMode = .manualOrdering }) {
+            Button(action: {
+                if vm.selectedWebOrder != nil {
+                    vm.currentPOSViewMode = .onlineOrders
+                } else {
+                    vm.currentPOSViewMode = .manualOrdering
+                }
+            }) {
                 Text("返回修改")
                     .font(.title2)
                     .fontWeight(.bold)

@@ -5,29 +5,57 @@ struct ContentView: View {
     // ★ 換腦手術的核心：宣告並綁定我們剛剛做好的 ViewModel
     @StateObject private var vm = POSViewModel()
     
+    // 起始畫面的animation switcher
+    @State private var showSplash: Bool = true
+    
     let pollingTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 0) {
-                OrderDetailsColumn(totalHeight: geometry.size.height)
-                    .frame(width: geometry.size.width * 0.3)
-                Divider()
-                FunctionTogglesColumn(totalHeight: geometry.size.height)
-                Divider()
-                FunctionDisplayColumn()
-                    .frame(maxWidth: .infinity)
+        ZStack {
+            GeometryReader { geometry in
+                HStack(spacing: 0) {
+                    OrderDetailsColumn(totalHeight: geometry.size.height)
+                        .frame(width: geometry.size.width * 0.3)
+                    Divider()
+                    FunctionTogglesColumn(totalHeight: geometry.size.height)
+                    Divider()
+                    FunctionDisplayColumn()
+                        .frame(maxWidth: .infinity)
+                }
             }
-        }
-        .statusBarHidden(true)
-        .persistentSystemOverlays(.hidden)
-        .defersSystemGestures(on: .top)
-        .overlay(PopupOverlayView())
-        .onReceive(pollingTimer) { _ in Task { await vm.checkNewWebOrders() } }
-        .task { await vm.fetchMenuData() }
-        .onAppear {
-            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeLeft))
+            .statusBarHidden(true)
+            .persistentSystemOverlays(.hidden)
+            .defersSystemGestures(on: .top)
+            .overlay(PopupOverlayView())
+            .overlay(CustomDateDialogOverlay())
+            .overlay(CancelOrderConfirmDialogOverlay())
+            .onReceive(pollingTimer) { _ in Task { await vm.checkNewWebOrders() } }
+            .task { await vm.fetchMenuData() }
+            .onAppear {
+                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                    windowScene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeLeft))
+                }
+            }
+
+            // 過場動畫圖層 (放在 ZStack 最後面，代表蓋在最上層)
+            if showSplash {
+                ZStack {
+                    Color(UIColor.systemBackground).ignoresSafeArea()
+
+                    Image("basil_v1")
+                        .resizable()
+                        .scaledToFill() // 改為填滿模式
+                        .ignoresSafeArea() // 無視安全範圍，讓圖片直接頂到螢幕最邊緣
+                }
+                .transition(.opacity)
+                .zIndex(2.0)
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation(.easeOut(duration: 0.8)) {
+                            showSplash = false
+                        }
+                    }
+                }
             }
         }
     }
@@ -39,17 +67,20 @@ struct ContentView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("訂單總覽").font(.headline).fontWeight(.bold).padding(.bottom, 2)
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        LabeledInfoView(title: "建立時間", value: vm.formattedCreationTime)
-                        LabeledInfoView(title: "交易型態", value: vm.orderMetadata.transactionType)
-                        LabeledInfoView(title: "發票號碼", value: vm.orderMetadata.invoiceNumber)
-                        LabeledInfoView(title: "統一編號", value: vm.orderMetadata.ubn)
-                        LabeledInfoView(title: "發票載具", value: vm.orderMetadata.carrier)
-                    }
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 6) {
+                    LabeledInfoView(title: "建立時間", value: vm.formattedCreationTime)
+                    LabeledInfoView(title: "交易型態", value: vm.orderMetadata.transactionType)
+                    LabeledInfoView(title: "桌號", value: vm.selectedTable)
+                    // Text("桌號： \(vm.selectedTable)")
+                        .foregroundColor(.primary)
+                    LabeledInfoView(title: "發票號碼", value: vm.orderMetadata.invoiceNumber)
+                    LabeledInfoView(title: "統一編號", value: vm.orderMetadata.ubn)
+                    LabeledInfoView(title: "發票載具", value: vm.orderMetadata.carrier)
                 }
-                Text("Ver: SuPOS_26may19_2_rabi")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+            }
+                Text("Ver: SuPOS_26may27_antigravity")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .padding(.top, 2)
             }
@@ -80,7 +111,7 @@ struct ContentView: View {
         let columnWidth: CGFloat = 180
         let spacing: CGFloat = 8
         let buttonSize: CGFloat = (columnWidth - 24) / 2
-        let topBottomButtonHeight: CGFloat = 60
+        let topBottomButtonHeight: CGFloat = 80
         let arrowHeight: CGFloat = 45
         let fixedHeights = arrowHeight + buttonSize + 16
         let gridRowsPerPage = max(1, Int((totalHeight - fixedHeights) / (buttonSize + 8)))
@@ -172,6 +203,7 @@ struct ContentView: View {
                     case .tempOrders: TempOrdersPanelView()
                     case .checkout: CheckoutPanelView(vm: vm, size: geo.size)
                     case .dailyTurnover: DailyTurnoverPanelView(size: geo.size)
+                    case .tableSelection: TableSelectionView(size: geo.size)
                     }
                 }
             }
@@ -561,19 +593,42 @@ extension ContentView {
     @ViewBuilder
     func TransactionHistoryPanelView(size: CGSize) -> some View {
         VStack(spacing: 0) {
-            HStack { Spacer(); Text("線上訂單交易紀錄").font(.title).fontWeight(.bold); Spacer() }.padding().frame(height: 70).background(Color(UIColor.systemGray6))
-            Divider()
             HStack(spacing: 15) {
                 ForEach(OrderDateFilter.allCases, id: \.self) { filter in
                     Button(filter.rawValue) {
-                        vm.selectedDateFilter = filter
-                        Task { await vm.fetchHistoryFromCloud() }
+                        if filter == .custom {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                vm.showingCustomDateDialog = true
+                            }
+                        } else {
+                            vm.selectedDateFilter = filter
+                            Task { await vm.fetchHistoryFromCloud() }
+                        }
                     }
                     .padding(.vertical, 10).padding(.horizontal, 24)
                     .background(vm.selectedDateFilter == filter ? Color.blue : Color(UIColor.systemGray5))
                     .foregroundColor(vm.selectedDateFilter == filter ? .white : .primary)
                     .cornerRadius(20)
                 }
+                
+                if vm.selectedDateFilter == .custom {
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            vm.showingCustomDateDialog = true
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "calendar")
+                            Text("\(dateString(vm.customStartDate)) - \(dateString(vm.customEndDate))")
+                                .font(.subheadline).fontWeight(.medium)
+                        }
+                        .padding(.vertical, 10).padding(.horizontal, 16)
+                        .background(Color.blue.opacity(0.1))
+                        .foregroundColor(.blue)
+                        .cornerRadius(20)
+                    }
+                }
+                
                 Spacer()
             }.padding(.horizontal, 20).padding(.vertical, 12)
             Divider()
@@ -591,6 +646,12 @@ extension ContentView {
             }
         }
     }
+    
+    private func dateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy/MM/dd"
+        return formatter.string(from: date)
+    }
 
     @ViewBuilder
     func OnlineOrdersPanel(size: CGSize) -> some View {
@@ -599,7 +660,7 @@ extension ContentView {
                 HeaderView(selectedWebOrder: order, onBack: { vm.selectedWebOrder = nil })
                 OrderDetailContentView(order: order)
             } else {
-                OrderListView(webOrders: vm.webOrders.filter { $0.state == "PENDING" || $0.state == "READY" }, currentPage: $vm.webOrderPage, selectedOrder: $vm.selectedWebOrder)
+                OrderListView(webOrders: vm.todaysWebOrders, currentPage: $vm.webOrderPage, selectedOrder: $vm.selectedWebOrder)
             }
         }
     }
@@ -739,6 +800,7 @@ extension ContentView {
         if vm.showingOrderPopup, let order = vm.incomingOrder {
             ZStack {
                 Color.black.opacity(0.6).ignoresSafeArea()
+                    .transition(.opacity)
                 VStack(spacing: 0) {
                     VStack(spacing: 15) {
                         Text("🔔 收到新線上訂單！").font(.largeTitle).fontWeight(.bold).foregroundColor(.red)
@@ -748,9 +810,19 @@ extension ContentView {
                     Divider()
                     HStack(spacing: 0) {
                         Button("訂單入機") { vm.updateWebOrderState(orderId: order.orderId, newState: "READY") }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.blue).foregroundColor(.white)
-                        Button("確認訂單內容") { vm.showingOrderPopup = false; vm.currentPOSViewMode = .onlineOrders; vm.selectedWebOrder = nil }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(UIColor.systemGray5))
+                        Button("確認訂單內容") { 
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                vm.showingOrderPopup = false
+                            }
+                            vm.currentPOSViewMode = .onlineOrders; vm.selectedWebOrder = nil 
+                        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(UIColor.systemGray5))
                     }.frame(height: 80)
-                }.frame(width: 450, height: 320).background(Color(UIColor.systemBackground)).cornerRadius(20).shadow(radius: 20)
+                }
+                .frame(width: 450, height: 320)
+                .background(Color(UIColor.systemBackground))
+                .cornerRadius(20)
+                .shadow(radius: 20)
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
             }
         }
     }
@@ -841,7 +913,9 @@ extension ContentView {
                 
                 Button(action: {
                     HapticManager.shared.triggerMedium()
-                    vm.updateWebOrderState(orderId: order.orderId, newState: "CANCELED")
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        vm.showingCancelOrderConfirmDialog = true
+                    }
                 }) {
                     Text("取消訂單").font(.title3).fontWeight(.bold).foregroundColor(.white).frame(maxWidth: .infinity, maxHeight: 60).background(Color.red).cornerRadius(12)
                 }.buttonStyle(JapaneseButtonStyle())
@@ -925,5 +999,261 @@ extension ContentView {
             // 畫面一出現就自動呼叫 ViewModel 去抓歷史訂單
             Task { await vm.fetchHistoryOrders() }
         }
+    }
+
+    @ViewBuilder
+    func TableSelectionView(size: CGSize) -> some View {
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 15), count: 5)
+
+        VStack(spacing: 20) {
+            Text("請選擇桌號")
+                .font(.title2).fontWeight(.bold).padding(.top, 30)
+
+            LazyVGrid(columns: columns, spacing: 15) {
+                ForEach(1...20, id: \.self) { num in
+                    let tableStr = String(format: "%02d", num)
+                    let isSelected = vm.selectedTable == "\(num)號桌"
+
+                    Button(action: {
+                        vm.selectedTable = "\(num)號桌"
+                        vm.currentPOSViewMode = .manualOrdering
+                    }) {
+                        Text(tableStr)
+                            .font(.system(size: 28, weight: .bold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: size.height * 0.15)
+                            .background(isSelected ? Color.blue : Color.white)
+                            .foregroundColor(isSelected ? .white : .primary)
+                            .cornerRadius(12)
+                            .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 2)
+                    }
+                }
+            }.padding(25)
+            Spacer()
+        }
+        .frame(width: size.width, height: size.height)
+        .background(Color(UIColor.systemGray6))
+    }
+    
+    @ViewBuilder
+    func CustomDateDialogOverlay() -> some View {
+        if vm.showingCustomDateDialog {
+            CustomDateDialogView(vm: vm)
+        }
+    }
+    
+    @ViewBuilder
+    func CancelOrderConfirmDialogOverlay() -> some View {
+        if vm.showingCancelOrderConfirmDialog, let order = vm.selectedWebOrder {
+            ZStack {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .background(.ultraThinMaterial)
+                    .transition(.opacity)
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            vm.showingCancelOrderConfirmDialog = false
+                        }
+                    }
+                
+                VStack(spacing: 24) {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 50))
+                            .foregroundColor(.red)
+                            .padding(.top, 25)
+                        
+                        Text("確定要取消訂單嗎？")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        
+                        Text("訂單單號：\(order.orderId)\n取消後此訂單將無法復原，請確認。")
+                            .font(.body)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                    }
+                    
+                    Divider()
+                    
+                    HStack(spacing: 15) {
+                        Button("保留訂單") {
+                            HapticManager.shared.triggerLight()
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                vm.showingCancelOrderConfirmDialog = false
+                            }
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(Color(UIColor.systemGray5))
+                        .foregroundColor(.primary)
+                        .cornerRadius(12)
+                        
+                        Button("確認取消") {
+                            HapticManager.shared.triggerMedium()
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                vm.showingCancelOrderConfirmDialog = false
+                                vm.updateWebOrderState(orderId: order.orderId, newState: "CANCELED")
+                            }
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(Color.red)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 25)
+                }
+                .frame(width: 400)
+                .background(Color(UIColor.systemBackground))
+                .cornerRadius(24)
+                .shadow(radius: 25)
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
+        }
+    }
+}
+
+struct CustomDateDialogView: View {
+    @ObservedObject var vm: POSViewModel
+    @State private var tempStartDate: Date
+    @State private var tempEndDate: Date
+    @State private var activePicker: ActivePickerField = .start
+    
+    enum ActivePickerField {
+        case start, end
+    }
+    
+    init(vm: POSViewModel) {
+        self.vm = vm
+        _tempStartDate = State(initialValue: vm.selectedDateFilter == .custom ? vm.customStartDate : Date())
+        _tempEndDate = State(initialValue: vm.selectedDateFilter == .custom ? vm.customEndDate : Date())
+    }
+    
+    var body: some View {
+        let minDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        let maxDate = Date()
+        
+        ZStack {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .background(.ultraThinMaterial)
+                .transition(.opacity)
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        vm.showingCustomDateDialog = false
+                    }
+                }
+            
+            VStack(spacing: 20) {
+                Text("選擇自選日期區間")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .padding(.top, 25)
+                
+                HStack(spacing: 20) {
+                    Button(action: {
+                        activePicker = .start
+                        HapticManager.shared.triggerLight()
+                    }) {
+                        VStack(spacing: 6) {
+                            Text("起始日").font(.subheadline).foregroundColor(activePicker == .start ? .blue : .secondary)
+                            Text(dateString(tempStartDate))
+                                .font(.title3).fontWeight(.bold)
+                                .foregroundColor(activePicker == .start ? .blue : .primary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(activePicker == .start ? Color.blue.opacity(0.1) : Color(UIColor.secondarySystemBackground))
+                        .cornerRadius(12)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(activePicker == .start ? Color.blue : Color.clear, lineWidth: 2))
+                    }
+                    
+                    Button(action: {
+                        activePicker = .end
+                        HapticManager.shared.triggerLight()
+                    }) {
+                        VStack(spacing: 6) {
+                            Text("結束日").font(.subheadline).foregroundColor(activePicker == .end ? .blue : .secondary)
+                            Text(dateString(tempEndDate))
+                                .font(.title3).fontWeight(.bold)
+                                .foregroundColor(activePicker == .end ? .blue : .primary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(activePicker == .end ? Color.blue.opacity(0.1) : Color(UIColor.secondarySystemBackground))
+                        .cornerRadius(12)
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(activePicker == .end ? Color.blue : Color.clear, lineWidth: 2))
+                    }
+                }
+                .padding(.horizontal, 24)
+                
+                Divider()
+                
+                ZStack {
+                    if activePicker == .start {
+                        DatePicker("", selection: $tempStartDate, in: minDate...maxDate, displayedComponents: .date)
+                            .datePickerStyle(.wheel)
+                            .labelsHidden()
+                            .onChange(of: tempStartDate) { newValue in
+                                if tempEndDate < newValue {
+                                    tempEndDate = newValue
+                                }
+                            }
+                    } else {
+                        DatePicker("", selection: $tempEndDate, in: tempStartDate...maxDate, displayedComponents: .date)
+                            .datePickerStyle(.wheel)
+                            .labelsHidden()
+                    }
+                }
+                .frame(height: 200)
+                
+                Divider()
+                
+                HStack(spacing: 15) {
+                    Button("取消") {
+                        HapticManager.shared.triggerLight()
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            vm.showingCustomDateDialog = false
+                        }
+                    }
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(Color(UIColor.systemGray5))
+                    .foregroundColor(.primary)
+                    .cornerRadius(12)
+                    
+                    Button("確認") {
+                        HapticManager.shared.triggerSuccess()
+                        vm.customStartDate = tempStartDate
+                        vm.customEndDate = tempEndDate
+                        vm.selectedDateFilter = .custom
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            vm.showingCustomDateDialog = false
+                        }
+                        Task { await vm.fetchHistoryFromCloud() }
+                    }
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 25)
+            }
+            .frame(width: 480)
+            .background(Color(UIColor.systemBackground))
+            .cornerRadius(24)
+            .shadow(radius: 25)
+            .transition(.scale(scale: 0.9).combined(with: .opacity))
+        }
+    }
+    
+    private func dateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy/MM/dd"
+        return formatter.string(from: date)
     }
 }

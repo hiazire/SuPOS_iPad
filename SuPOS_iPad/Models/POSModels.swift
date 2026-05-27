@@ -27,6 +27,44 @@ struct MenuItem: Identifiable, Codable, Hashable {
         case id, category, name, price, imageUrl
         case optionsGroup = "options_group"
     }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        
+        // 必須先解碼 name，以便在 id 為空時生成穩定雜湊值
+        let nameVal = (try? c.decode(String.self, forKey: .name)) ?? ""
+        self.name = nameVal
+        
+        // id 可能從 Sheet 回來是字串、空字串或數字，進行容錯處理
+        if let intVal = try? c.decode(Int.self, forKey: .id) {
+            self.id = intVal
+        } else if let strVal = try? c.decode(String.self, forKey: .id), 
+                  !strVal.trimmingCharacters(in: .whitespaces).isEmpty, 
+                  let intVal = Int(strVal.trimmingCharacters(in: .whitespaces)) {
+            self.id = intVal
+        } else {
+            // 如果 id 為空白或無法解析，使用 name 生成穩定的 id，確保 UI 元件正常且不崩潰
+            var hash = 5381
+            for char in nameVal.unicodeScalars {
+                hash = ((hash << 5) &+ hash) &+ Int(char.value)
+            }
+            self.id = abs(hash)
+            print("⚠️ [MenuItem] 發現空白或無效 ID (商品: \(nameVal))，已動態指派安全 ID: \(self.id)")
+        }
+        
+        category = (try? c.decode(String.self, forKey: .category)) ?? ""
+        
+        // price 同樣做容錯
+        if let intVal = try? c.decode(Int.self, forKey: .price) {
+            price = intVal
+        } else if let strVal = try? c.decode(String.self, forKey: .price), let intVal = Int(strVal) {
+            price = intVal
+        } else {
+            price = 0
+        }
+        imageUrl     = (try? c.decode(String.self, forKey: .imageUrl)) ?? ""
+        optionsGroup = try? c.decode(String.self, forKey: .optionsGroup)
+    }
 }
 
 // 2026may20
@@ -91,13 +129,13 @@ enum POSViewMode {
     case onlineOrders
     case tempOrders
     case dailyTurnover // 日營業額模式
+    case tableSelection
 }
 
 enum OrderDateFilter: String, CaseIterable {
     case today = "今天"
     case yesterday = "昨天"
-    case threeDays = "三天內"
-    case fiveDays = "五天內"
+    case custom = "自選"
 }
 
 struct OptionItem: Identifiable, Codable, Hashable {
