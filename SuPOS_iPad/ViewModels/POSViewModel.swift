@@ -22,6 +22,7 @@ class POSViewModel: ObservableObject {
     @Published var showingOrderPopup: Bool = false
     @Published var showingCustomDateDialog: Bool = false
     @Published var showingCancelOrderConfirmDialog: Bool = false
+    @Published var showingChangePriceDialog: Bool = false // 🌟 新增：是否顯示單品變價對話框
     @Published var selectedWebOrder: WebOrder? = nil
     @Published var activeWebOrderId: String = ""
     @Published var webOrderPage: Int = 0
@@ -51,7 +52,8 @@ class POSViewModel: ObservableObject {
         cart.reduce(0) { total, item in
             guard !item.isComplimentary else { return total }
             let optionsPrice = item.selectedOptions.reduce(0) { $0 + $1.price }
-            return total + ((item.menuItem.price + optionsPrice) * item.quantity)
+            let basePrice = item.customPrice ?? item.menuItem.price
+            return total + ((basePrice + optionsPrice) * item.quantity)
         }
     }
 
@@ -102,6 +104,11 @@ class POSViewModel: ObservableObject {
             FuncButton(title: "取消交易", icon: "xmark.circle", action: { self.cancelEntireTransaction() }),
             FuncButton(title: "清除加料", icon: "minus.square", action: { self.clearOptionsOfSelected() }),
             FuncButton(title: "招待", icon: "gift.fill", action: { self.applyComplimentary() }),
+            FuncButton(title: "變價", icon: "dollarsign.circle.fill", action: {
+                if self.selectedCartItemID != nil {
+                    self.showingChangePriceDialog = true
+                }
+            }),
             FuncButton(title: "交易紀錄", icon: "doc.text.magnifyingglass", action: {
                 self.currentPOSViewMode = .transactionHistory
                 self.selectedItemForOptions = nil
@@ -360,6 +367,13 @@ class POSViewModel: ObservableObject {
             cart[idx].isComplimentary.toggle()
         } else if !cart.isEmpty {
             for i in 0..<cart.count { cart[i].isComplimentary = true }
+        }
+    }
+
+    func changePriceOfSelected(to newPrice: Int?) {
+        HapticManager.shared.triggerSuccess()
+        if let id = selectedCartItemID, let idx = cart.firstIndex(where: { $0.id == id }) {
+            cart[idx].customPrice = newPrice
         }
     }
 

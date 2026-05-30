@@ -29,6 +29,7 @@ struct ContentView: View {
             .overlay(PopupOverlayView())
             .overlay(CustomDateDialogOverlay())
             .overlay(CancelOrderConfirmDialogOverlay())
+            .overlay(ChangePriceDialogOverlay())
             .onReceive(pollingTimer) { _ in Task { await vm.checkNewWebOrders() } }
             .task { await vm.fetchMenuData() }
             .onAppear {
@@ -79,7 +80,7 @@ struct ContentView: View {
                     LabeledInfoView(title: "發票載具", value: vm.orderMetadata.carrier)
                 }
             }
-                Text("Ver: SuPOS_26may27_antigravity")
+                Text("Ver: SuPOS_26may30_change_price")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .padding(.top, 2)
@@ -695,7 +696,8 @@ extension ContentView {
             LazyVStack(spacing: 0) {
                 ForEach(vm.cart, id: \.id) { item in
                     let optionsPrice = item.selectedOptions.reduce(0) { $0 + $1.price }
-                    let total = (item.menuItem.price + optionsPrice) * item.quantity
+                    let basePrice = item.customPrice ?? item.menuItem.price
+                    let total = (basePrice + optionsPrice) * item.quantity
 
                     Button(action: {
                         vm.selectedCartItemID = item.id
@@ -777,7 +779,7 @@ extension ContentView {
                             
                             Text("$\(item.isComplimentary ? 0 : total)")
                                 .fontWeight(.bold)
-                                .foregroundColor(item.isComplimentary ? .red : .primary)
+                                .foregroundColor(item.isComplimentary ? .red : (item.customPrice != nil ? .blue : .primary))
                         }
                         .padding(.vertical, 12)
                         .padding(.horizontal, 16)
@@ -1113,6 +1115,13 @@ extension ContentView {
             }
         }
     }
+    
+    @ViewBuilder
+    func ChangePriceDialogOverlay() -> some View {
+        if vm.showingChangePriceDialog {
+            ChangePriceDialogView(vm: vm)
+        }
+    }
 }
 
 struct CustomDateDialogView: View {
@@ -1255,5 +1264,148 @@ struct CustomDateDialogView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy/MM/dd"
         return formatter.string(from: date)
+    }
+}
+
+struct ChangePriceDialogView: View {
+    @ObservedObject var vm: POSViewModel
+    @State private var inputPriceString: String = ""
+    
+    init(vm: POSViewModel) {
+        self.vm = vm
+        if let id = vm.selectedCartItemID,
+           let item = vm.cart.first(where: { $0.id == id }) {
+            // 預設帶入當前自訂單價，若無則帶入原商品定價
+            let price = item.customPrice ?? item.menuItem.price
+            _inputPriceString = State(initialValue: String(price))
+        }
+    }
+    
+    var body: some View {
+        ZStack {
+            // 背景遮罩
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .background(.ultraThinMaterial)
+                .transition(.opacity)
+                .onTapGesture {
+                    closeDialog()
+                }
+            
+            VStack(spacing: 20) {
+                if let id = vm.selectedCartItemID,
+                   let item = vm.cart.first(where: { $0.id == id }) {
+                    
+                    VStack(spacing: 8) {
+                        Text("單品變價調整")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .padding(.top, 25)
+                        
+                        Text(item.menuItem.name)
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("原商品定價：")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("$\(item.menuItem.price)")
+                                .fontWeight(.medium)
+                        }
+                        .font(.body)
+                        
+                        if let customPrice = item.customPrice {
+                            HStack {
+                                Text("目前自訂單價：")
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text("$\(customPrice)")
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.blue)
+                            }
+                            .font(.body)
+                        }
+                    }
+                    .padding(.horizontal, 30)
+                    
+                    Divider()
+                    
+                    HStack(spacing: 12) {
+                        Text("$")
+                            .font(.title).fontWeight(.bold)
+                            .foregroundColor(.blue)
+                        
+                        TextField("請輸入新單價", text: $inputPriceString)
+                            .font(.system(size: 24, weight: .bold))
+                            .keyboardType(.numberPad)
+                            .padding(12)
+                            .background(Color(UIColor.secondarySystemBackground))
+                            .cornerRadius(10)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .padding(.horizontal, 30)
+                    
+                    Divider()
+                    
+                    HStack(spacing: 15) {
+                        Button("取消") {
+                            closeDialog()
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(Color(UIColor.systemGray5))
+                        .foregroundColor(.primary)
+                        .cornerRadius(12)
+                        
+                        if item.customPrice != nil {
+                            Button("恢復原價") {
+                                HapticManager.shared.triggerLight()
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    vm.changePriceOfSelected(to: nil)
+                                    vm.showingChangePriceDialog = false
+                                }
+                            }
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                            .background(Color.orange.opacity(0.15))
+                            .foregroundColor(.orange)
+                            .cornerRadius(12)
+                        }
+                        
+                        Button("確認變價") {
+                            let newPrice = Int(inputPriceString) ?? item.menuItem.price
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                vm.changePriceOfSelected(to: newPrice)
+                                vm.showingChangePriceDialog = false
+                            }
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(12)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 25)
+                } else {
+                    Text("未選取品項").padding()
+                }
+            }
+            .frame(width: 440)
+            .background(Color(UIColor.systemBackground))
+            .cornerRadius(24)
+            .shadow(radius: 25)
+            .transition(.scale(scale: 0.9).combined(with: .opacity))
+        }
+    }
+    
+    private func closeDialog() {
+        HapticManager.shared.triggerLight()
+        withAnimation(.easeInOut(duration: 0.3)) {
+            vm.showingChangePriceDialog = false
+        }
     }
 }

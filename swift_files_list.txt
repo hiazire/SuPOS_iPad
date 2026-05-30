@@ -1,0 +1,7 @@
+Swift files in SuPOS_iPad project:
+1. /Users/sufuhan/Documents/SuPOS_iPad/SuPOS_iPad/ContentView.swift
+2. /Users/sufuhan/Documents/SuPOS_iPad/SuPOS_iPad/ViewModels/POSViewModel.swift
+3. /Users/sufuhan/Documents/SuPOS_iPad/SuPOS_iPad/Models/POSModels.swift
+4. /Users/sufuhan/Documents/SuPOS_iPad/SuPOS_iPad/Components/CheckoutPanelView.swift
+5. /Users/sufuhan/Documents/SuPOS_iPad/SuPOS_iPad/Components/POSComponents.swift
+6. /Users/sufuhan/Documents/SuPOS_iPad/SuPOS_iPad/SuPOS_iPadApp.swift

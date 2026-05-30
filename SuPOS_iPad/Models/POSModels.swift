@@ -152,6 +152,7 @@ struct CartItem: Identifiable, Hashable {
     var quantity: Int
     var selectedOptions: [OptionItem]
     var isComplimentary: Bool = false
+    var customPrice: Int? = nil // 🌟 新增：自訂價格（變價）
 
     static func == (lhs: CartItem, rhs: CartItem) -> Bool {
         lhs.id == rhs.id
